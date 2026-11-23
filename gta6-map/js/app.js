@@ -137,7 +137,7 @@
         cats[m.c] = { id: m.c, g: 'autres', n: String(m.c || 'Autres'), color: '#cccccc', icon: 'pin', hidden: false, presets: [], list: [], ndone: 0 };
         catOrder.push(m.c);
       }
-      var o = { id: String(m.id), c: m.c, x: m.x, y: m.y, n: m.n || 'Sans nom', d: m.d || '', g: typeof m.g === 'string' ? m.g.trim() : '', approx: !!m.approx, src: m.src || '', mk: null, on: false };
+      var o = { id: String(m.id), c: m.c, x: m.x, y: m.y, n: m.n || 'Sans nom', d: m.d || '', g: typeof m.g === 'string' ? m.g.trim() : '', approx: !!m.approx, src: m.src || '', v: (m.v && typeof m.v === 'object') ? m.v : null, mk: null, on: false };
       o.key = norm(o.n);
       o.full = o.key + ' ' + norm(o.d) + ' ' + norm(o.g) + ' ' + norm(cats[m.c].n);
       markers.push(o); byId[o.id] = o; cats[m.c].list.push(o);
@@ -345,6 +345,12 @@
   function buildPanel() {
     var pres = $('presets');
     pres.innerHTML = '';
+    var tv = $('btnTopVal');
+    if (tv && !tv.dataset.bound) {
+      tv.dataset.bound = '1';
+      tv.hidden = !markers.some(function (m) { return mainValue(m.v) > 0; });
+      tv.addEventListener('click', showTopValue);
+    }
     PRESETS.forEach(function (p) {
       var ids = presetCats(p.id);
       if (!ids.length) return;
@@ -468,7 +474,7 @@
     var c = cats[m.c];
     var b = document.createElement('button');
     b.type = 'button'; b.className = 'res'; b.setAttribute('role', 'option');
-    b.innerHTML = '<span class="dot" style="--c:' + esc(c.color) + '">' + ICONS.use(c.icon) + '</span><span class="rt"><span class="rn">' + esc(m.n) + '</span><span class="rc">' + esc(c.n) +
+    b.innerHTML = '<span class="dot" style="--c:' + esc(c.color) + '">' + ICONS.use(c.icon) + '</span><span class="rt"><span class="rn">' + esc(m.n) + '</span><span class="rc">' + esc(c.n) + (valueTag(m.v) ? ' · <b class="rv">' + esc(valueTag(m.v)) + '</b>' : '') +
       (done[m.id] ? ' · fait ✓' : '') + (!visible[m.c] ? ' · <span class="off">calque masqué</span>' : '') + '</span></span>';
     b.addEventListener('click', function () { focusMarker(m); });
     return b;
@@ -514,6 +520,19 @@
     box.scrollTop = 0;
   }
   function closeResults() { $('results').hidden = true; }
+  function showTopValue() {
+    var real = markers.filter(function (m) { return realValue(m.v) > 0; }).sort(function (a, b) { return realValue(b.v) - realValue(a.v); });
+    var est = markers.filter(function (m) { return !realValue(m.v) && m.v && m.v.base; }).sort(function (a, b) { return b.v.base - a.v.base; });
+    var box = $('results');
+    box.innerHTML = '<div class="res-empty small">Ce qu\'ils rapportent vraiment (paie de Randy/Moses ou revente) — ' + real.length + ' véhicules</div>';
+    real.forEach(function (m) { box.appendChild(resultRow(m)); });
+    if (est.length) {
+      box.insertAdjacentHTML('beforeend', '<div class="res-empty small">Valeur exacte inconnue — classés par prix du modèle de série (' + est.length + ')</div>');
+      est.forEach(function (m) { box.appendChild(resultRow(m)); });
+    }
+    if (!isWide()) closePanel();
+    box.hidden = false; box.scrollTop = 0;
+  }
 
   function focusMarker(m) {
     closeResults(); $('q').blur();
@@ -585,6 +604,28 @@
     updateCounts();
   }
 
+  function money(n) { return typeof n === 'number' && isFinite(n) && n > 0 ? String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, '\u202f') + '\u00a0$' : ''; }
+  function mainValue(v) { return v ? (v.pay || v.sell || v.base || 0) : 0; }
+  function realValue(v) { return v ? (v.pay || v.sell || 0) : 0; }
+  function valueTag(v) {
+    if (!v) return '';
+    if (v.pay) return 'paie ' + money(v.pay);
+    if (v.sell) return 'revente ' + money(v.sell);
+    if (v.base) return 'modèle de série ' + money(v.base);
+    return '';
+  }
+  function valueBlock(m) {
+    var v = m.v; if (!v) return '';
+    var rows = [];
+    if (v.pay) rows.push(['Paie du commanditaire', money(v.pay)]);
+    if (v.sell) rows.push(['Revente', money(v.sell)]);
+    if (v.reg) rows.push(['Coût pour la garder (enregistrement)', money(v.reg)]);
+    if (v.base && !v.sell && !v.pay) rows.push(['Modèle de série (coût d\'enregistrement)', money(v.base)]);
+    if (!rows.length) return '';
+    return '<div class="val"><b>Valeur</b>' + rows.map(function (r) { return '<div class="vr"><span>' + esc(r[0]) + '</span><strong>' + esc(r[1]) + '</strong></div>'; }).join('') +
+      (v.conf === 'moyenne' ? '<small>Valeur indicative (source unique)</small>' : '') + '</div>';
+  }
+
   function renderSheet() {
     var m = selected; if (!m) return;
     var c = cats[m.c];
@@ -592,6 +633,7 @@
     var h = '<div class="shd"><span class="dot" style="--c:' + esc(c.color) + '">' + ICONS.use(c.icon) + '</span><div><h2>' + esc(m.n) + '</h2>' +
       '<span class="pill" style="--c:' + esc(c.color) + '"><i></i>' + esc(c.n) + '</span></div></div>' +
       (m.g ? '<div class="howto"><span class="hti">' + ICONS.use('ui_compass') + '</span><div><b>Comment le trouver dans le jeu</b><p>' + esc(m.g) + '</p></div></div>' : '') +
+      valueBlock(m) +
       '<div class="meta"><span>Zone : <b>' + esc(zoneOf(m)) + '</b></span></div>';
     if (m.approx) h += '<div class="approx">◌ Position approximative</div>';
     h += m.d ? '<p class="desc">' + esc(m.d) + '</p>' : '<p class="desc empty">Pas encore de description pour ce point.</p>';

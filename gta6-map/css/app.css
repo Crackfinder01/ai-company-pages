@@ -358,3 +358,11 @@ body.mybg-drag #map { cursor: move; }
 .mfoot { padding: 10px 14px calc(14px + var(--sab)); border-top: 1px solid var(--line); }
 .mfoot .btn.wide { margin: 0; }
 .busy { position: absolute; inset: 0; z-index: 2700; display: grid; place-items: center; background: rgba(3, 5, 18, .75); }
+
+.val { margin: 12px 0 0; padding: 10px 12px; border-radius: 12px; background: rgba(255, 216, 77, .08); border: 1px solid rgba(255, 216, 77, .5); }
+.val b { display: block; font-size: 13px; letter-spacing: .12em; text-transform: uppercase; color: #ffd84d; margin-bottom: 4px; }
+.val .vr { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; font-size: 16px; }
+.val .vr strong { color: #ffe680; font-size: 18px; white-space: nowrap; }
+.val small { display: block; margin-top: 4px; color: var(--muted, #a9a3d9); font-size: 13px; }
+.rv { color: #ffd84d; font-weight: 700; }
+.chip.topval { margin-top: 10px; border-color: rgba(255, 216, 77, .6); background: rgba(255, 216, 77, .1); color: #ffe680; }
