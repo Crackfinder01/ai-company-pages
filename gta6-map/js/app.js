@@ -137,7 +137,7 @@
         cats[m.c] = { id: m.c, g: 'autres', n: String(m.c || 'Autres'), color: '#cccccc', icon: 'pin', hidden: false, presets: [], list: [], ndone: 0 };
         catOrder.push(m.c);
       }
-      var o = { id: String(m.id), c: m.c, x: m.x, y: m.y, n: m.n || 'Sans nom', d: m.d || '', g: typeof m.g === 'string' ? m.g.trim() : '', approx: !!m.approx, src: m.src || '', v: (m.v && typeof m.v === 'object') ? m.v : null, mk: null, on: false };
+      var o = { id: String(m.id), c: m.c, x: m.x, y: m.y, n: m.n || 'Sans nom', d: m.d || '', g: typeof m.g === 'string' ? m.g.trim() : '', approx: !!m.approx, src: m.src || '', v: (m.v && typeof m.v === 'object') ? m.v : null, l: (m.l && typeof m.l === 'object') ? m.l : null, mk: null, on: false };
       o.key = norm(o.n);
       o.full = o.key + ' ' + norm(o.d) + ' ' + norm(o.g) + ' ' + norm(cats[m.c].n);
       markers.push(o); byId[o.id] = o; cats[m.c].list.push(o);
@@ -351,6 +351,12 @@
       tv.hidden = !markers.some(function (m) { return mainValue(m.v) > 0; });
       tv.addEventListener('click', showTopValue);
     }
+    var tl = $('btnTopLoot');
+    if (tl && !tl.dataset.bound) {
+      tl.dataset.bound = '1';
+      tl.hidden = !markers.some(function (m) { return lootScore(m.l) > 0; });
+      tl.addEventListener('click', showTopLoot);
+    }
     PRESETS.forEach(function (p) {
       var ids = presetCats(p.id);
       if (!ids.length) return;
@@ -474,7 +480,7 @@
     var c = cats[m.c];
     var b = document.createElement('button');
     b.type = 'button'; b.className = 'res'; b.setAttribute('role', 'option');
-    b.innerHTML = '<span class="dot" style="--c:' + esc(c.color) + '">' + ICONS.use(c.icon) + '</span><span class="rt"><span class="rn">' + esc(m.n) + '</span><span class="rc">' + esc(c.n) + (valueTag(m.v) ? ' · <b class="rv">' + esc(valueTag(m.v)) + '</b>' : '') +
+    b.innerHTML = '<span class="dot" style="--c:' + esc(c.color) + '">' + ICONS.use(c.icon) + '</span><span class="rt"><span class="rn">' + esc(m.n) + '</span><span class="rc">' + esc(c.n) + (valueTag(m.v) ? ' · <b class="rv">' + esc(valueTag(m.v)) + '</b>' : lootRange(m.l) ? ' · <b class="rv">' + esc(lootRange(m.l)) + '</b>' : '') +
       (done[m.id] ? ' · fait ✓' : '') + (!visible[m.c] ? ' · <span class="off">calque masqué</span>' : '') + '</span></span>';
     b.addEventListener('click', function () { focusMarker(m); });
     return b;
@@ -626,6 +632,27 @@
       (v.conf === 'moyenne' ? '<small>Valeur indicative (source unique)</small>' : '') + '</div>';
   }
 
+  var LOOT_LBL = { cash: 'Butin', resale: 'Valeur à la revente', reward: 'Récompense', price: 'Prix' };
+  function lootRange(l) {
+    if (!l || !(l.max || l.min)) return '';
+    if (l.min && !l.max) return 'plus de ' + money(l.min);
+    return l.min && l.max && l.min !== l.max ? money(l.min) + ' – ' + money(l.max) : money(l.max || l.min);
+  }
+  function lootScore(l) { return l ? ((l.min || 0) + (l.max || l.min || 0)) / 2 : 0; }
+  function lootBlock(m) {
+    var l = m.l, r = lootRange(l); if (!r) return '';
+    return '<div class="val"><b>' + esc(LOOT_LBL[l.kind] || 'Valeur') + '</b><div class="vr"><span>' + esc(l.note || '') + '</span><strong>' + esc(r) + '</strong></div>' +
+      (l.rule ? '<small>Montant habituel pour ce type de lieu</small>' : l.conf === 'moyenne' ? '<small>Valeur indicative (source unique)</small>' : '') + '</div>';
+  }
+  function showTopLoot() {
+    var list = markers.filter(function (m) { return lootScore(m.l) > 0 && m.l.kind !== 'price'; }).sort(function (a, b) { return lootScore(b.l) - lootScore(a.l) || (a.l.rule ? 1 : 0) - (b.l.rule ? 1 : 0); });
+    var box = $('results');
+    box.innerHTML = '<div class="res-empty small">Braquages, planques et objets classés par ce qu\'ils rapportent (' + list.length + ')</div>';
+    list.slice(0, 150).forEach(function (m) { box.appendChild(resultRow(m)); });
+    if (!isWide()) closePanel();
+    box.hidden = false; box.scrollTop = 0;
+  }
+
   function renderSheet() {
     var m = selected; if (!m) return;
     var c = cats[m.c];
@@ -633,7 +660,7 @@
     var h = '<div class="shd"><span class="dot" style="--c:' + esc(c.color) + '">' + ICONS.use(c.icon) + '</span><div><h2>' + esc(m.n) + '</h2>' +
       '<span class="pill" style="--c:' + esc(c.color) + '"><i></i>' + esc(c.n) + '</span></div></div>' +
       (m.g ? '<div class="howto"><span class="hti">' + ICONS.use('ui_compass') + '</span><div><b>Comment le trouver dans le jeu</b><p>' + esc(m.g) + '</p></div></div>' : '') +
-      valueBlock(m) +
+      valueBlock(m) + lootBlock(m) +
       '<div class="meta"><span>Zone : <b>' + esc(zoneOf(m)) + '</b></span></div>';
     if (m.approx) h += '<div class="approx">◌ Position approximative</div>';
     h += m.d ? '<p class="desc">' + esc(m.d) + '</p>' : '<p class="desc empty">Pas encore de description pour ce point.</p>';
