@@ -400,13 +400,50 @@
     X.toast('Capture supprimée de ton téléphone');
   }
 
+  /* ---------- Calages automatiques connus (reconnus à la taille de l'image) ----------
+     Paramètres calculés à partir d'une image fournie par l'utilisateur ; l'app ne contient aucune image. */
+  var PRESETS_TF = [
+    { w: 1206, h: 2622, name: 'Carte complète (capture)', crop: [14, 338, 1158, 1448], t: { a: 12.160473, b: 0.030034, c: -10846.069599, d: 0.01328, e: -12.437966, f: 14003.002963 } }
+  ];
+  function presetFor(w, h) {
+    for (var i = 0; i < PRESETS_TF.length; i++) {
+      var P = PRESETS_TF[i];
+      if (Math.abs(w / h - P.w / P.h) < 0.004 * (P.w / P.h)) {
+        var kx = P.w / w, ky = P.h / h, t = P.t;
+        var cr = P.crop ? [Math.round(P.crop[0] / kx), Math.round(P.crop[1] / ky), Math.round(P.crop[2] / kx), Math.round(P.crop[3] / ky)] : null;
+        return { name: P.name, crop: cr, t: { a: t.a * kx, b: t.b * ky, c: t.c, d: t.d * kx, e: t.e * ky, f: t.f, kind: 'affine' } };
+      }
+    }
+    return null;
+  }
+
+  function cropBlob(blob, cr) {
+    // recadre l'image (retire les barres d'interface) ; renvoie { blob, w, h } ou null si échec
+    return decode(blob).then(function (o) {
+      var c = document.createElement('canvas'); c.width = cr[2]; c.height = cr[3];
+      c.getContext('2d').drawImage(o.img, cr[0], cr[1], cr[2], cr[3], 0, 0, cr[2], cr[3]);
+      try { URL.revokeObjectURL(o.url); } catch (e) { /* */ }
+      return canvasToBlob(c).then(function (b) { c.width = 1; c.height = 1; return b && b.size ? { blob: b, w: cr[2], h: cr[3] } : null; });
+    }).catch(function () { return null; });
+  }
+
   /* ---------- Import ---------- */
   function busyShow(msg) { $('busyMsg').textContent = msg; $('busy').hidden = !msg; }
   function onFile(file) {
     if (!file) return;
     if (file.type && file.type.indexOf('image/') !== 0) { X.toast('Ce fichier n\'est pas une image.'); return; }
     busyShow('Préparation de ta capture…');
+    var pre = null;
     prepareImage(file).then(function (r) {
+      pre = presetFor(r.w, r.h);
+      if (!pre || !pre.crop) return r;
+      return cropBlob(r.blob, pre.crop).then(function (c2) {
+        if (!c2) return r;
+        var t = pre.t, u0 = pre.crop[0], v0 = pre.crop[1];
+        pre.t = { a: t.a, b: t.b, c: t.c + t.a * u0 + t.b * v0, d: t.d, e: t.e, f: t.f + t.d * u0 + t.e * v0, kind: 'affine' };
+        return c2;
+      });
+    }).then(function (r) {
       var n = 1; while (items.some(function (x) { return x.name === 'Capture ' + n; })) n++;
       var it = { id: 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name: 'Capture ' + n, blob: r.blob, w: r.w, h: r.h,
         created: Date.now(), tf: null, pts: [], show: true, op: 1, layer: null };
@@ -414,7 +451,15 @@
         it.url = url;
         items.push(it);
         try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(function () { /* */ }); } catch (e) { /* */ }
-        return saveNew(it).then(function () { busyShow(''); renderList(); calOpen(it, true); });
+        if (pre) { it.tf = copyT(pre.t); it.pts = []; }
+        return saveNew(it).then(function () {
+          busyShow(''); renderList();
+          if (pre) {
+            syncLayers(); renderList();
+            adjOpen(it, true); fitTo(it);
+            X.toast('Carte reconnue : calage automatique fait ✔');
+          } else calOpen(it, true);
+        });
       });
     }).catch(function () {
       busyShow('');
