@@ -4,7 +4,7 @@
 
   var ICONS = window.GTA6_ICONS;
   var $ = function (id) { return document.getElementById(id); };
-  var DATA_FILES = ['markers', 'categories', 'groups', 'land', 'labels'];
+  var DATA_FILES = ['markers', 'categories', 'groups', 'land', 'labels', 'roads'];
   var MIN_Z = -6, MAX_Z = 2;
 
   // Préréglages : listes d'id de catégories et/ou groupes entiers. Les id absents des données sont ignorés.
@@ -101,7 +101,7 @@
     var opaque = false;
     try { opaque = window.origin === 'null' || location.protocol === 'file:'; } catch (e) { opaque = true; }
     if (opaque) return loadBundle();
-    var opt = { groups: [], land: null, labels: [] };
+    var opt = { groups: [], land: null, labels: [], roads: [] };
     var p = typeof fetch === 'function' ? Promise.all(DATA_FILES.map(function (n) {
       return fetchJSON(n).catch(function (e) { if (n in opt) return opt[n]; throw e; });
     })).then(function (arr) {
@@ -211,7 +211,7 @@
     L.polyline(lines, { renderer: bg, color: '#22e6ff', weight: 1, opacity: 0.07, interactive: false }).addTo(map);
 
     // terre
-    var polys = D.land && Array.isArray(D.land.polygons) ? D.land.polygons : [];
+    var polys = D.land && Array.isArray(D.land.polygons) ? D.land.polygons.concat(Array.isArray(D.land.holes) ? D.land.holes : []) : [];
     var rings = polys.filter(function (p) { return Array.isArray(p) && p.length > 2; }).map(function (p) {
       return p.map(function (pt) { return [pt[1], pt[0]]; });
     });
@@ -219,6 +219,16 @@
       L.polygon(rings, { renderer: bg, stroke: true, color: '#ff2e97', weight: 7, opacity: 0.16, fill: false, interactive: false, smoothFactor: 1.5 }).addTo(map);
       L.polygon(rings, { renderer: bg, stroke: true, color: '#33e1ff', weight: 1.3, opacity: 0.75, fill: true, fillColor: '#1c1648', fillOpacity: 1, interactive: false, smoothFactor: 1.5 }).addTo(map);
     }
+
+    // routes principales (approximatives)
+    var roads = Array.isArray(D.roads) ? D.roads : [];
+    roads.forEach(function (r) {
+      if (!r || !Array.isArray(r.pts) || r.pts.length < 2) return;
+      var ll = r.pts.map(function (pt) { return [pt[1], pt[0]]; });
+      var hw = r.k === 'highway';
+      L.polyline(ll, { renderer: bg, color: '#0e0b2a', weight: hw ? 5 : 3.5, opacity: 0.9, interactive: false, smoothFactor: 1.5 }).addTo(map);
+      L.polyline(ll, { renderer: bg, color: hw ? '#ffb3e0' : '#b9b3ff', weight: hw ? 2.2 : 1.4, opacity: hw ? 0.55 : 0.4, interactive: false, smoothFactor: 1.5 }).addTo(map);
+    });
 
     // libellés
     labelLayer = L.layerGroup().addTo(map);

@@ -1,6 +1,6 @@
 /* Service worker « Carte GTA 6 » : pré-cache de tous les fichiers, stratégie cache d'abord.
    VERSION et PRECACHE sont réécrits par `python3 build_data.py --finalize`. */
-const VERSION = '5e90a1c5c3';
+const VERSION = 'd9a237695e';
 const CACHE = 'carte-gta6-' + VERSION;
 const PRECACHE = [
   './',
@@ -13,6 +13,7 @@ const PRECACHE = [
   './data/labels.json',
   './data/land.json',
   './data/markers.json',
+  './data/roads.json',
   './icons/apple-touch-icon.png',
   './icons/favicon-32.png',
   './icons/icon-192.png',
