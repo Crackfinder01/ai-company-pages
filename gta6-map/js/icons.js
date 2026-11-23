@@ -85,7 +85,16 @@
     ui_ruler: 'M3 17L17 3l4 4L7 21zM7 13l2 2M10 10l2 2M13 7l2 2',
     ui_chev: 'M9 6l6 6-6 6',
     ui_trash: 'M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14',
-    ui_home: 'M4 10.5L12 4l8 6.5V20H4z'
+    ui_home: 'M4 10.5L12 4l8 6.5V20H4z',
+    ui_compass: C(12, 12, 9) + 'M15.5 8.5l-2 5-5 2 2-5z',
+    ui_image: 'M3 5h18v14H3zM3 16l5-5 4 4 3-3 6 6' + C(16, 9, 1.5),
+    ui_upload: 'M12 15V4M7.5 8.5L12 4l4.5 4.5M4 15v5h16v-5',
+    ui_arrow: 'M12 19V5M6 11l6-6 6 6',
+    ui_rotl: 'M4 4v5h5M4.6 9A8 8 0 1 1 6 16.5',
+    ui_rotr: 'M20 4v5h-5M19.4 9A8 8 0 1 0 18 16.5',
+    ui_move: 'M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3',
+    ui_undo: 'M9 14L4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3',
+    ui_help: C(12, 12, 9) + 'M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.7M12 17h.01'
   };
   var NS = 'http://www.w3.org/2000/svg';
   function buildSprite() {

@@ -137,9 +137,9 @@
         cats[m.c] = { id: m.c, g: 'autres', n: String(m.c || 'Autres'), color: '#cccccc', icon: 'pin', hidden: false, presets: [], list: [], ndone: 0 };
         catOrder.push(m.c);
       }
-      var o = { id: String(m.id), c: m.c, x: m.x, y: m.y, n: m.n || 'Sans nom', d: m.d || '', approx: !!m.approx, src: m.src || '', mk: null, on: false };
+      var o = { id: String(m.id), c: m.c, x: m.x, y: m.y, n: m.n || 'Sans nom', d: m.d || '', g: typeof m.g === 'string' ? m.g.trim() : '', approx: !!m.approx, src: m.src || '', mk: null, on: false };
       o.key = norm(o.n);
-      o.full = o.key + ' ' + norm(o.d) + ' ' + norm(cats[m.c].n);
+      o.full = o.key + ' ' + norm(o.d) + ' ' + norm(o.g) + ' ' + norm(cats[m.c].n);
       markers.push(o); byId[o.id] = o; cats[m.c].list.push(o);
     });
     catOrder.forEach(function (id) {
@@ -197,8 +197,11 @@
     map.attributionControl.addAttribution('Carte non officielle · fond dessiné · <a href="https://leafletjs.com" target="_blank" rel="noopener">Leaflet</a>');
     map.createPane('labels').style.zIndex = 450;
     map.createPane('me').style.zIndex = 700;
+    map.createPane('base').style.zIndex = 300;   // fond dessiné (grille, terre)
+    map.createPane('mybg').style.zIndex = 350;   // « Mon fond de carte » (captures de l'utilisateur)
+    map.createPane('mybgline').style.zIndex = 360; // contours de contrôle pendant le calage
 
-    var bg = L.canvas({ padding: 0.5 });
+    var bg = L.canvas({ padding: 0.5, pane: 'base' });
     // grille néon (repère visuel, tous les 1000 m)
     var gx0 = Math.floor((b[0] - gpx) / 1000) * 1000, gx1 = Math.ceil((b[2] + gpx) / 1000) * 1000;
     var gy0 = Math.floor((b[1] - gpy) / 1000) * 1000, gy1 = Math.ceil((b[3] + gpy) / 1000) * 1000;
@@ -250,13 +253,16 @@
     updateLabels();
 
     map.on('click', function (e) {
+      if (mybgBusy()) return;
       if (placingMe) { setMe(e.latlng); setPlacing(false); return; }
       closeResults();
       if (selected) closeSheet();
       else if (document.body.classList.contains('panel-open') && !isWide()) closePanel();
     });
-    map.on('contextmenu', function (e) { setMe(e.latlng); setPlacing(false); });
+    map.on('contextmenu', function (e) { if (mybgBusy()) return; setMe(e.latlng); setPlacing(false); });
   }
+
+  function mybgBusy() { return !!(window.GTA6_MYBG && window.GTA6_MYBG.busy()); }
 
   function updateLabels() {
     var z = map.getZoom();
@@ -575,7 +581,8 @@
     var me = store.get('me', null);
     var h = '<div class="shd"><span class="dot" style="--c:' + esc(c.color) + '">' + ICONS.use(c.icon) + '</span><div><h2>' + esc(m.n) + '</h2>' +
       '<span class="pill" style="--c:' + esc(c.color) + '"><i></i>' + esc(c.n) + '</span></div></div>' +
-      '<div class="meta"><span>Zone : <b>' + esc(zoneOf(m)) + '</b></span><span>X <b>' + Math.round(m.x) + '</b> · Y <b>' + Math.round(m.y) + '</b></span></div>';
+      (m.g ? '<div class="howto"><span class="hti">' + ICONS.use('ui_compass') + '</span><div><b>Comment le trouver dans le jeu</b><p>' + esc(m.g) + '</p></div></div>' : '') +
+      '<div class="meta"><span>Zone : <b>' + esc(zoneOf(m)) + '</b></span></div>';
     if (m.approx) h += '<div class="approx">◌ Position approximative</div>';
     h += m.d ? '<p class="desc">' + esc(m.d) + '</p>' : '<p class="desc empty">Pas encore de description pour ce point.</p>';
     if (me) h += '<div class="dist">' + fmtDist(Math.hypot(me[0] - m.x, me[1] - m.y)) + ' de « Je suis ici » (à vol d\'oiseau)</div>';
@@ -684,6 +691,7 @@
     $('qClear').addEventListener('click', function () { q.value = ''; search(''); q.focus(); });
     document.addEventListener('keydown', function (e) {
       if (e.key !== 'Escape') return;
+      if (mybgBusy()) return;
       if (placingMe) setPlacing(false);
       else if (!$('results').hidden) closeResults();
       else if (selected) closeSheet();
@@ -723,6 +731,12 @@
       bindUI();
       drawMe();
       applyVisibility();
+      if (window.GTA6_MYBG) {
+        try {
+          window.GTA6_MYBG.init({ map: map, land: D.land, labels: D.labels, markers: markers, cats: cats, store: store, toast: toast, esc: esc, norm: norm,
+            fmtDist: fmtDist, isWide: isWide, openPanel: openPanel, closePanel: closePanel, closeSheet: function () { if (selected) closeSheet(); } });
+        } catch (e) { /* la carte reste utilisable sans « Mon fond de carte » */ }
+      }
       if (isWide()) openPanel();
       document.body.classList.add('ready');
       var l = $('loader'); l.classList.add('hide');

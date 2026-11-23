@@ -67,6 +67,16 @@
         <h3>Mes favoris</h3>
         <div id="favList" class="favlist"></div>
       </section>
+      <section class="psec" id="mybgSec">
+        <h3>Mon fond de carte</h3>
+        <p class="muted small">Affiche ta propre capture de la carte du jeu sous les points, pour que l'app ressemble exactement à ce que tu vois en jeu.</p>
+        <div id="mybgList" class="mybglist"></div>
+        <button id="mybgImport" class="btn primary wide" type="button"><span data-ic="ui_upload"></span>Importer ma capture de la carte du jeu</button>
+        <input id="mybgFile" class="vh" type="file" accept="image/*" tabindex="-1" aria-hidden="true">
+        <p class="muted small mybg-tip">Prends la capture avec la carte du jeu dézoomée au maximum, nord en haut. Elle reste uniquement sur ton téléphone.</p>
+        <button id="mybgHelp" class="btn ghost wide" type="button"><span data-ic="ui_help"></span>Comment faire ? (4 étapes)</button>
+        <p id="mybgNote" class="warn small" hidden></p>
+      </section>
       <section class="psec">
         <h3>Calques</h3>
         <div id="groups"></div>
@@ -85,6 +95,60 @@
     <div id="sheetBody"></div>
   </section>
 
+  <!-- Mon fond de carte : réglage fin -->
+  <section id="adj" class="adj" aria-label="Ajuster ma capture" hidden>
+    <div class="adj-h"><b id="adjTitle">Ajuster ma capture</b><p id="adjText" class="small"></p></div>
+    <div class="seg" role="group" aria-label="Ce que tes doigts déplacent">
+      <button type="button" id="adjModeImg" aria-pressed="true"><span data-ic="ui_image"></span>Bouger la capture</button>
+      <button type="button" id="adjModeMap" aria-pressed="false"><span data-ic="ui_move"></span>Bouger la carte</button>
+    </div>
+    <div class="adj-pad" id="adjPad">
+      <button type="button" class="padb" data-a="left" aria-label="Décaler à gauche"><span class="r270" data-ic="ui_arrow"></span></button>
+      <button type="button" class="padb" data-a="up" aria-label="Décaler vers le haut"><span data-ic="ui_arrow"></span></button>
+      <button type="button" class="padb" data-a="down" aria-label="Décaler vers le bas"><span class="r180" data-ic="ui_arrow"></span></button>
+      <button type="button" class="padb" data-a="right" aria-label="Décaler à droite"><span class="r90" data-ic="ui_arrow"></span></button>
+      <button type="button" class="padb" data-a="smaller" aria-label="Rétrécir"><span data-ic="ui_minus"></span><small>Taille</small></button>
+      <button type="button" class="padb" data-a="bigger" aria-label="Agrandir"><span data-ic="ui_plus"></span><small>Taille</small></button>
+      <button type="button" class="padb" data-a="rotl" aria-label="Tourner à gauche"><span data-ic="ui_rotl"></span></button>
+      <button type="button" class="padb" data-a="rotr" aria-label="Tourner à droite"><span data-ic="ui_rotr"></span></button>
+    </div>
+    <div class="rowbtns">
+      <button type="button" id="adjCancel" class="btn">Annuler</button>
+      <button type="button" id="adjDone" class="btn primary">Terminé</button>
+    </div>
+  </section>
+
+  <!-- Mon fond de carte : calage en 2 repères -->
+  <div id="cal" class="cal" role="dialog" aria-modal="true" aria-label="Caler ma capture" hidden>
+    <div class="cal-view">
+      <div id="calMap"></div>
+      <div class="cal-cross" aria-hidden="true"><i></i></div>
+      <div class="cal-loupe" id="calLoupe" aria-hidden="true"><div id="calLoupeImg"></div><i></i></div>
+      <button id="calCancel" class="iconbtn cal-x" type="button" aria-label="Quitter le calage"><span data-ic="ui_close"></span></button>
+      <div class="cal-zoom">
+        <button id="calZoomIn" class="fab" type="button" aria-label="Zoomer sur la capture"><span data-ic="ui_plus"></span></button>
+        <button id="calZoomOut" class="fab" type="button" aria-label="Dézoomer la capture"><span data-ic="ui_minus"></span></button>
+      </div>
+    </div>
+    <div class="cal-card" id="calCard"></div>
+    <div class="cal-pick" id="calPick" hidden>
+      <div class="phead"><h2 class="pick-t">Choisis un repère visible sur ta capture</h2><button id="calPickClose" class="iconbtn" type="button" aria-label="Fermer la liste"><span data-ic="ui_close"></span></button></div>
+      <div class="pick-s"><input id="calPickQ" type="search" placeholder="Chercher un lieu (ville, pont…)" autocomplete="off" spellcheck="false" aria-label="Chercher un repère"></div>
+      <div class="pick-l" id="calPickList"></div>
+    </div>
+  </div>
+
+  <!-- Mon fond de carte : mini-tutoriel -->
+  <div id="tuto" class="modal" role="dialog" aria-modal="true" aria-labelledby="tutoT" hidden>
+    <div class="mbox">
+      <div class="phead"><h2 id="tutoT" class="pick-t">Mon fond de carte en 4 étapes</h2><button id="tutoClose" class="iconbtn" type="button" aria-label="Fermer"><span data-ic="ui_close"></span></button></div>
+      <ol class="tsteps" id="tutoSteps"></ol>
+      <div class="mfoot"><button id="tutoGo" class="btn primary wide" type="button"><span data-ic="ui_upload"></span>Choisir ma capture</button></div>
+    </div>
+  </div>
+
+  <div id="busy" class="busy" hidden><div class="lbox"><div class="bar"><i></i></div><p id="busyMsg">Préparation de ta capture…</p></div></div>
+
   <div id="toast" role="status" aria-live="polite"></div>
 
   <!-- Chargement -->
@@ -102,6 +166,7 @@
 <script src="vendor/leaflet/leaflet.js"></script>
 <script src="vendor/markercluster/leaflet.markercluster.js"></script>
 <script src="js/icons.js"></script>
+<script src="js/mybg.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>
