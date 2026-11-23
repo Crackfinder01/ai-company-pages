@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Carte GTA 6 — Leonida</title>
+<meta name="description" content="Carte interactive de Leonida (GTA 6) : braquages, coffres, voitures rares, collectibles, activités. Fonctionne hors ligne.">
+<meta name="theme-color" content="#070b1f">
+<meta name="color-scheme" content="dark">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Carte GTA6">
+<meta name="format-detection" content="telephone=no">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="vendor/markercluster/MarkerCluster.css">
+<link rel="stylesheet" href="css/fonts.css">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="app">
+  <div id="map" role="application" aria-label="Carte de Leonida"></div>
+
+  <!-- Barre du haut -->
+  <header id="topbar">
+    <button id="btnLayers" class="iconbtn" type="button" aria-label="Calques" aria-controls="panel" aria-expanded="false"><span data-ic="ui_layers"></span></button>
+    <div id="searchbox" role="search">
+      <span class="sicon" data-ic="ui_search"></span>
+      <input id="q" type="search" placeholder="Rechercher un lieu, un objet…" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="search" aria-label="Rechercher">
+      <button id="qClear" class="iconbtn small" type="button" aria-label="Effacer la recherche" hidden><span data-ic="ui_close"></span></button>
+    </div>
+    <div id="results" role="listbox" aria-label="Résultats de recherche" hidden></div>
+  </header>
+
+  <!-- Boutons flottants -->
+  <div id="fabs">
+    <button id="btnZoomIn" class="fab" type="button" aria-label="Zoomer"><span data-ic="ui_plus"></span></button>
+    <button id="btnZoomOut" class="fab" type="button" aria-label="Dézoomer"><span data-ic="ui_minus"></span></button>
+    <button id="btnPlaceMe" class="fab pink" type="button" aria-label="Poser mon repère « Je suis ici »" title="Poser « Je suis ici »"><span data-ic="ui_me"></span></button>
+    <button id="btnGoMe" class="fab cyan" type="button" aria-label="Recentrer sur mon repère" title="Recentrer sur mon repère" disabled><span data-ic="ui_center"></span></button>
+  </div>
+
+  <div id="modeHint" class="hint" hidden></div>
+
+  <!-- Panneau calques -->
+  <div id="scrim" hidden></div>
+  <aside id="panel" aria-label="Calques" aria-hidden="true">
+    <div class="phead">
+      <h2 class="brand">CARTE <b>GTA 6</b><small>Leonida</small></h2>
+      <button id="btnPanelClose" class="iconbtn" type="button" aria-label="Fermer les calques"><span data-ic="ui_close"></span></button>
+    </div>
+    <div class="pbody">
+      <section class="psec">
+        <h3>Préréglages rapides</h3>
+        <div id="presets" class="chips"></div>
+        <label class="switch">
+          <input id="hideDone" type="checkbox">
+          <span class="sw"></span>
+          <span>Masquer les points déjà faits</span>
+        </label>
+        <p id="visibleCount" class="muted small"></p>
+      </section>
+      <section class="psec" id="favSec" hidden>
+        <h3>Mes favoris</h3>
+        <div id="favList" class="favlist"></div>
+      </section>
+      <section class="psec">
+        <h3>Calques</h3>
+        <div id="groups"></div>
+      </section>
+      <section class="psec about">
+        <p class="muted small">Carte non officielle, dessinée pour l'app. Positions issues de la communauté : certaines sont approximatives (contour en pointillé). Appui long sur la carte = poser « Je suis ici ».</p>
+        <button id="btnResetProgress" class="btn ghost danger" type="button">Remettre à zéro ma progression</button>
+      </section>
+    </div>
+  </aside>
+
+  <!-- Fiche d'un point -->
+  <section id="sheet" aria-live="polite" aria-hidden="true">
+    <div class="grab" aria-hidden="true"></div>
+    <button id="sheetClose" class="iconbtn small sclose" type="button" aria-label="Fermer la fiche"><span data-ic="ui_close"></span></button>
+    <div id="sheetBody"></div>
+  </section>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <!-- Chargement -->
+  <div id="loader">
+    <div class="lbox">
+      <div class="logo">CARTE <b>GTA 6</b></div>
+      <div class="sub">Leonida · Vice City</div>
+      <div class="bar"><i></i></div>
+      <p id="loaderMsg">Chargement de la carte…</p>
+      <button id="btnRetry" class="btn" type="button" hidden>Réessayer</button>
+    </div>
+  </div>
+  <noscript><div class="noscript">Cette carte a besoin de JavaScript.</div></noscript>
+</div>
+<script src="vendor/leaflet/leaflet.js"></script>
+<script src="vendor/markercluster/leaflet.markercluster.js"></script>
+<script src="js/icons.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
