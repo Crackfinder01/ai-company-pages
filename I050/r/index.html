@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Déclaration préalable de travaux : dossier complet relu par un humain, à partir de vos photos</title>
+<meta name="description" content="Projet indépendant en préparation : dossier de déclaration préalable (abri, piscine, clôture, pergola, panneaux solaires) préparé à partir de photos et de dimensions. Prix envisagé : 79 euros.">
+<meta name="robots" content="noindex">
+<style>
+ body{font-family:system-ui,Arial,sans-serif;margin:0;color:#1d2733;background:#f6f8fa;line-height:1.55}
+ main{max-width:720px;margin:0 auto;padding:24px 18px 60px}
+ .banner{background:#fff4d6;border:1px solid #e8c66a;padding:10px 14px;border-radius:8px;font-size:.95rem}
+ h1{font-size:1.8rem;line-height:1.2;margin:24px 0 10px}
+ h2{font-size:1.25rem;margin-top:32px}
+ .price{background:#fff;border:1px solid #d0d7de;border-radius:10px;padding:16px;margin:18px 0}
+ .price strong{font-size:1.6rem}
+ .cta{display:inline-block;background:#0b5cad;color:#fff;border:0;border-radius:8px;padding:14px 26px;font-size:1.1rem;cursor:pointer}
+ .cta:hover{background:#084a8c}
+ .thanks{display:none;background:#e6f5ea;border:1px solid #8fcf9f;border-radius:10px;padding:18px;margin-top:18px}
+ ul{padding-left:20px}
+ small,.small{color:#58626d;font-size:.85rem}
+ footer{margin-top:40px;border-top:1px solid #d0d7de;padding-top:14px}
+</style>
+</head>
+<body>
+<!-- Compteur de visites : Cloudflare Web Analytics (sans cookie, sans donnée personnelle, compte Cloudflare de Thibaut). -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "12b0586ec92542acb023e64d7f75623d", "spa": true}'></script>
+<main>
+<div class="banner"><strong>Produit en préparation.</strong> Il n'existe pas encore. Rien ne peut être acheté sur cette page et nous ne collectons aucune donnée personnelle. Nous mesurons seulement l'intérêt.</div>
+<h1>Votre dossier de déclaration préalable de travaux, préparé à partir de vos photos et de vos dimensions</h1>
+<p>Abri de jardin, piscine, clôture, pergola, panneaux solaires : nous prévoyons de préparer le dossier à déposer en mairie, relu par une personne avant livraison.</p>
+
+<h2>Le problème</h2>
+<p>Avant certains travaux, il faut déposer une déclaration préalable en mairie, avec un formulaire officiel et des plans (situation, masse, façades). Les règles sont décrites sur le site de l'administration
+(<a href="https://www.service-public.gouv.fr/particuliers/vosdroits/F17578" rel="noopener">service-public.gouv.fr</a>), mais dessiner les plans et remplir le dossier sans erreur reste long, et un dossier incomplet fait perdre du temps.</p>
+
+<h2>Ce que nous prévoyons de construire</h2>
+<ul>
+ <li>Vous indiquez l'adresse, le type de travaux, les dimensions et quelques photos.</li>
+ <li>Nous préparons les pièces du dossier : plans, formulaire officiel rempli, notice descriptive.</li>
+ <li>Une personne relit le dossier avant que vous le receviez, prêt à déposer.</li>
+ <li>Si la mairie demande une correction liée à notre travail, nous la reprenons sans frais supplémentaires.</li>
+</ul>
+<p class="small">Ce projet est indépendant : il n'est pas un service officiel et n'a aucun lien avec l'administration. Nous ne pouvons pas garantir l'accord de la mairie, qui dépend des règles d'urbanisme de votre commune.</p>
+
+<div class="price">
+ <p>Prix envisagé : <strong>79 €</strong> par dossier, paiement unique. Pas d'abonnement.<br>
+ <span class="small">Ce prix est une hypothèse à tester. Aucun paiement n'est possible aujourd'hui.</span></p>
+ <button class="cta" type="button" onclick="want()">Je le veux</button>
+</div>
+
+<div class="thanks" id="thanks-fr" role="status">
+ <strong>Merci, votre intérêt est noté.</strong><br>
+ Votre clic a été compté, c'est tout : nous n'avons enregistré ni votre nom ni votre adresse e-mail, et aucun paiement n'a eu lieu. Le produit n'est pas encore disponible.
+</div>
+
+<footer class="small">
+ Cette page ne contient aucun cookie ni formulaire. Les visites et les clics sont comptés par un compteur sans cookie (Cloudflare Web Analytics), sans donnée personnelle.
+</footer>
+</main>
+<script>
+ var clicked = false;
+ function want(){
+  document.getElementById('thanks-fr').style.display = 'block';
+  if(!clicked){
+   clicked = true;
+   // Compte un clic (sans donnée personnelle) : une « page vue » merci-fr dans Cloudflare Web Analytics.
+   try { history.pushState({}, '', 'merci-fr'); } catch(e) {}
+  }
+ }
+</script>
+</body>
+</html>
