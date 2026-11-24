@@ -5,8 +5,8 @@
   var ICONS = window.GTA6_ICONS;
   var $ = function (id) { return document.getElementById(id); };
   // fichiers de données : les 2 premiers sont obligatoires, les autres optionnels (absents = fonction masquée)
-  var DATA_FILES = ['markers', 'categories', 'groups', 'land', 'labels', 'roads', 'routes', 'zones'];
-  var OPTIONAL = { groups: [], land: null, labels: [], roads: [], routes: [], zones: [] };
+  var DATA_FILES = ['markers', 'categories', 'groups', 'land', 'labels', 'roads', 'routes', 'zones', 'landuse', 'anchors', 'blips'];
+  var OPTIONAL = { groups: [], land: null, labels: [], roads: [], routes: [], zones: [], landuse: null, anchors: [], blips: null };
   var MIN_Z = -6, MAX_Z = 2;
   var AMT_Z = -0.5;          // zoom à partir duquel les montants s'affichent sous les icônes
 
@@ -141,11 +141,16 @@
   var iconCache = {};
   var routes = [], zones = [];
   var F = { min: 0, diff: {}, notrack: false, unlocked: false };   // filtres
-  var opt = { amt: true, size: false, zones: true, zk: {} };         // options d'affichage
+  var opt = { amt: true, size: false, zones: true, zk: {}, grid: false };         // options d'affichage
   var has = { amt: false, diff: false, notrack: false, unlocked: false };
   var zoneLayer = null, zoneRenderer = null;
   var route = null;         // tournée en cours : { r, pts, idx, line, glow, nums }
-  var landStyles = null;    // styles du fond dépendant du zoom
+  var bm = null;            // fond de carte dessiné (js/basemap.js)
+  var THEMES = { game: 'Jeu', neon: 'Néon' };
+  var theme = 'game';
+  var blips = null;         // catégorie -> { ingame, note } (blips.json)
+  var psMode = false;       // « Mode PlayStation »
+  var anchors = [];
 
   /* ---------- Chargement des données ---------- */
   function fetchJSON(name) {
@@ -296,6 +301,13 @@
       var sc = num(z.score); sc = sc === null ? 0.5 : Math.max(0, Math.min(1, sc));
       return { n: z.n || 'Zone', x: z.x, y: z.y, r: num(z.r), score: sc, kind: z.kind || '', lo: num(z.total_min) || 0, hi: num(z.total_max) || num(z.total_min) || 0, count: num(z.count) || 0 };
     }).sort(function (a, b) { return a.score - b.score; });   // les plus rentables dessinées au-dessus
+    // repérage : icônes visibles en jeu, grands repères, thème (optionnels)
+    blips = data.blips && typeof data.blips === 'object' && !Array.isArray(data.blips) ? data.blips : null;
+    var an = Array.isArray(data.anchors) ? data.anchors : (data.anchors && Array.isArray(data.anchors.anchors) ? data.anchors.anchors : []);
+    anchors = an.filter(function (a) { return a && (a.n || a.fr) && isFinite(a.x) && isFinite(a.y); });
+    if (!Array.isArray(data.roads)) D.roads = [];
+    var th = store.get('theme', 'game'); theme = THEMES[th] ? th : 'game';
+    psMode = !!store.get('ps', false) && hasBlips();
     // progression mémorisée
     (store.get('done', []) || []).forEach(function (id) { if (byId[id]) { done[id] = true; cats[byId[id].c].ndone++; } });
     (store.get('fav', []) || []).forEach(function (id) { if (byId[id]) fav[id] = true; });
@@ -312,7 +324,7 @@
     }
     var o = store.get('opts', null);
     if (o && typeof o === 'object') {
-      opt.amt = o.amt !== false; opt.size = !!o.size; opt.zones = o.zones !== false;
+      opt.amt = o.amt !== false; opt.size = !!o.size; opt.zones = o.zones !== false; opt.grid = !!o.grid;
       if (o.zk && typeof o.zk === 'object') opt.zk = o.zk;
     }
     if (!has.amt) F.min = 0;
@@ -370,66 +382,16 @@
     return null;
   }
 
-  function drawBase(b) {
-    var padX = (b[2] - b[0]) * 0.35, padY = (b[3] - b[1]) * 0.35, gpx = padX * 3, gpy = padY * 3;
-    // grille néon (repère visuel, tous les 1000 m) : canvas à part pour ne pas être teinté
-    var gridR = L.canvas({ padding: 0.5, pane: 'base' });
-    var gx0 = Math.floor((b[0] - gpx) / 1000) * 1000, gx1 = Math.ceil((b[2] + gpx) / 1000) * 1000;
-    var gy0 = Math.floor((b[1] - gpy) / 1000) * 1000, gy1 = Math.ceil((b[3] + gpy) / 1000) * 1000;
-    var lines = [];
-    for (var gx = gx0; gx <= gx1; gx += 1000) lines.push([[gy0, gx], [gy1, gx]]);
-    for (var gy = gy0; gy <= gy1; gy += 1000) lines.push([[gy, gx0], [gy, gx1]]);
-    L.polyline(lines, { renderer: gridR, color: '#22e6ff', weight: 1, opacity: 0.07, interactive: false }).addTo(map);
-
-    var R = new FxCanvas({ padding: 0.5, pane: 'base' });
-    var polys = D.land && Array.isArray(D.land.polygons) ? D.land.polygons.concat(Array.isArray(D.land.holes) ? D.land.holes : []) : [];
-    var rings = polys.filter(function (p) { return Array.isArray(p) && p.length > 2; }).map(function (p) {
-      return p.map(function (pt) { return [pt[1], pt[0]]; });
-    });
-    var base = { renderer: R, interactive: false, smoothFactor: 1.5 };
-    landStyles = {};
-    if (rings.length) {
-      // 1. ombre portée côtière (sous la terre)
-      L.polygon(rings, L.extend({ stroke: false, fill: true, fillColor: '#03020d', fillOpacity: 1, fx: { shadow: ['rgba(0,0,0,.9)', 26, 10] } }, base)).addTo(map);
-      // 2. halo néon autour des côtes
-      landStyles.glow = L.polygon(rings, L.extend({ stroke: true, color: '#ff2e97', weight: 8, opacity: 0.17, fill: false }, base)).addTo(map);
-      // 3. terre
-      L.polygon(rings, L.extend({ stroke: false, fill: true, fillColor: '#1b1647', fillOpacity: 1 }, base)).addTo(map);
-      // 4. bande claire le long du rivage (relief), peinte seulement sur la terre
-      landStyles.band = L.polygon(rings, L.extend({ stroke: true, color: '#6fe3ff', weight: 10, opacity: 0.12, fill: false, fx: { comp: 'source-atop' } }, base)).addTo(map);
-      // 5. teintes par région (villes plus claires, marais vert-bleu…), seulement sur la terre
-      D.labels.forEach(function (l) {
-        var t = tintFor(l); if (!t) return;
-        L.circle([l.y, l.x], L.extend({ radius: t.r, stroke: false, fill: true, fillOpacity: 1,
-          fx: { comp: 'source-atop', radial: [[0, 'rgba(' + t.c + ',' + t.a + ')'], [0.55, 'rgba(' + t.c + ',' + (t.a * 0.45).toFixed(3) + ')'], [1, 'rgba(' + t.c + ',0)']] } }, base)).addTo(map);
-      });
-      // 6. trait de côte
-      L.polygon(rings, L.extend({ stroke: true, color: '#33e1ff', weight: 1.3, opacity: 0.8, fill: false }, base)).addTo(map);
-    }
-    // routes principales (approximatives) : liseré sombre + trait lumineux
-    var roads = Array.isArray(D.roads) ? D.roads : [];
-    landStyles.roads = [];
-    roads.forEach(function (r) {
-      if (!r || !Array.isArray(r.pts) || r.pts.length < 2) return;
-      var ll = r.pts.map(function (pt) { return [pt[1], pt[0]]; });
-      var hw = r.k === 'highway';
-      var cas = L.polyline(ll, L.extend({ color: '#0a0720', weight: hw ? 6 : 4.5, opacity: 0.95, lineCap: 'round', lineJoin: 'round' }, base)).addTo(map);
-      var core = L.polyline(ll, L.extend({ color: hw ? '#ff9bd8' : '#c9c3ff', weight: hw ? 2.4 : 1.6, opacity: hw ? 0.85 : 0.6, lineCap: 'round', lineJoin: 'round' }, base)).addTo(map);
-      landStyles.roads.push({ hw: hw, cas: cas, core: core });
-    });
-    map.on('zoomend', styleBase);
-    styleBase();
+  // teintes radiales du thème « Néon » (villes plus claires, marais vert-bleu…)
+  function neonTints() {
+    var out = [];
+    D.labels.forEach(function (l) { var t = tintFor(l); if (t) out.push({ x: l.x, y: l.y, r: t.r, c: t.c, a: t.a }); });
+    return out;
   }
-  // épaisseurs selon le zoom (le canvas dessine en pixels écran)
-  function styleBase() {
-    if (!landStyles) return;
-    var z = map.getZoom(), k = Math.max(0, Math.min(1, (z - MIN_Z) / (MAX_Z - MIN_Z)));
-    if (landStyles.band) landStyles.band.setStyle({ weight: 5 + k * 22, opacity: 0.10 + k * 0.04 });
-    if (landStyles.glow) landStyles.glow.setStyle({ weight: 6 + k * 10 });
-    (landStyles.roads || []).forEach(function (r) {
-      r.cas.setStyle({ weight: (r.hw ? 5 : 3.5) + k * (r.hw ? 9 : 6) });
-      r.core.setStyle({ weight: (r.hw ? 2 : 1.3) + k * (r.hw ? 3.5 : 2.2) });
-    });
+  function drawBase() {
+    bm = window.GTA6_BASEMAP.create(map, { land: D.land, landuse: D.landuse, roads: D.roads }, { theme: theme, tints: neonTints() });
+    bm.addTo();
+    if (opt.grid) bm.setGrid(true);
   }
 
   /* ---------- Carte ---------- */
@@ -454,31 +416,36 @@
       tapTolerance: 15, bounceAtZoomLimits: false, wheelPxPerZoomLevel: 90
     });
     map.attributionControl.setPrefix(false);
-    map.attributionControl.addAttribution('Carte non officielle · fond dessiné · <a href="https://leafletjs.com" target="_blank" rel="noopener">Leaflet</a>');
+    map.attributionControl.addAttribution('Données : gta6map.io, gtabase.com, gta6info.app, gameta.gg, gtadb.org (<a href="https://creativecommons.org/licenses/by/4.0/deed.fr" target="_blank" rel="noopener">CC BY 4.0</a>) · carte non officielle, fond dessiné · <a href="https://leafletjs.com" target="_blank" rel="noopener">Leaflet</a>');
     map.createPane('base').style.zIndex = 300;     // fond dessiné (grille, terre)
     map.createPane('mybg').style.zIndex = 350;     // « Mon fond de carte » (captures de l'utilisateur)
     map.createPane('mybgline').style.zIndex = 360; // contours de contrôle pendant le calage
     map.createPane('zones').style.zIndex = 380;    // halos des zones rentables
     map.createPane('route').style.zIndex = 420;    // tracé de la tournée
+    map.createPane('streetlbl').style.zIndex = 440; // noms de rues (canvas)
     map.createPane('labels').style.zIndex = 450;
     map.createPane('routenum').style.zIndex = 640; // numéros de la tournée (au-dessus des marqueurs)
     map.createPane('me').style.zIndex = 700;
 
-    drawBase(b);
+    drawBase();
 
-    // libellés (avec anti-collision)
+    // libellés des lieux (avec anti-collision) ; « fr » prioritaire sur « n »
     labelLayer = L.layerGroup().addTo(map);
     labelItems = D.labels.map(function (l) {
-      var k = l.k === 'region' || l.k === 'district' ? l.k : 'city';
-      var minZ = typeof l.minZoom === 'number' ? l.minZoom : (k === 'region' ? MIN_Z : k === 'city' ? -4.5 : -2);
-      var maxZ = typeof l.maxZoom === 'number' ? l.maxZoom : (k === 'region' ? -3.5 : MAX_Z);
+      var k = LBL_KINDS[l.k] ? l.k : 'city';
+      var minZ = typeof l.minZoom === 'number' ? l.minZoom : LBL_KINDS[k].minZ;
+      var maxZ = typeof l.maxZoom === 'number' ? l.maxZoom : Math.max(LBL_KINDS[k].maxZ, minZ + 2);
+      var txt = labelText(l);
       var mk = L.marker([l.y, l.x], { pane: 'labels', interactive: false, keyboard: false,
-        icon: L.divIcon({ className: 'lbl ' + k, html: '<span>' + esc(l.n) + '</span>', iconSize: [0, 0] }) });
-      var sz = labelSize(l.n, k);
-      return { l: l, k: k, minZ: minZ, maxZ: maxZ, mk: mk, on: false, w: sz[0], h: sz[1], prio: (k === 'city' ? 0 : k === 'region' ? 1000 : 2000) + minZ * 10 };
+        icon: L.divIcon({ className: 'lbl ' + k, html: '<span>' + esc(txt) + '</span>', iconSize: [0, 0] }) });
+      return { l: l, k: k, t: txt, minZ: minZ, maxZ: maxZ, mk: mk, on: false, w: 0, h: 0, prio: LBL_KINDS[k].prio + minZ * 10 };
     }).sort(function (a, b2) { return a.prio - b2.prio; });
-    map.on('zoomend', updateLabels);
+    sizeLabels();
+    map.on('moveend', updateLabels);      // avant les noms de rues (qui évitent les libellés de lieux)
     map.on('zoomend', updateZoomClass);
+    bm.obstacles = function () { return placedBoxes; };
+    bm.addLabels();
+    initLocate();
 
     // zones rentables
     drawZones();
@@ -488,7 +455,7 @@
       chunkedLoading: true, chunkInterval: 120, chunkDelay: 20,
       showCoverageOnHover: false, spiderfyOnMaxZoom: true, zoomToBoundsOnClick: true, removeOutsideVisibleBounds: true,
       animate: true, animateAddingMarkers: false, spiderfyDistanceMultiplier: 1.6,
-      maxClusterRadius: function (z) { return z >= 1 ? 30 : z >= -1 ? 45 : 60; },
+      maxClusterRadius: function (z) { return z >= 1 ? 30 : z >= -1 ? 45 : z >= -3.5 ? 60 : 72; },
       disableClusteringAtZoom: null,
       iconCreateFunction: clusterIcon
     });
@@ -503,6 +470,7 @@
     }, 400));
     updateLabels();
     updateZoomClass();
+    bm.labels.redraw();
 
     map.on('click', function (e) {
       if (mybgBusy()) return;
@@ -516,42 +484,250 @@
 
   function mybgBusy() { return !!(window.GTA6_MYBG && window.GTA6_MYBG.busy()); }
 
+  // types de libellés : zoom mini/maxi par défaut et priorité (plus petit = plus important)
+  var LBL_KINDS = {
+    city: { minZ: -4.5, maxZ: MAX_Z, prio: 0 },
+    region: { minZ: MIN_Z, maxZ: -3.5, prio: 1000 },
+    district: { minZ: -2, maxZ: MAX_Z, prio: 2000 },
+    water: { minZ: -4.5, maxZ: MAX_Z, prio: 2500 },
+    poi: { minZ: 0, maxZ: MAX_Z, prio: 3000 }
+  };
+  function labelText(l) { return typeof l.fr === 'string' && l.fr.trim() ? l.fr.trim() : l.n; }
+  // police de chaque type de libellé selon le thème (doit correspondre à css/app.css)
+  function labelFont(k) {
+    var neon = theme === 'neon';
+    if (k === 'city') return neon ? ['700 15px Orbitron, sans-serif', 0.08, true] : ['700 17px Rajdhani, sans-serif', 0.1, true];
+    if (k === 'region') return neon ? ['700 13px Orbitron, sans-serif', 0.22, true] : ['700 14px Rajdhani, sans-serif', 0.26, true];
+    if (k === 'district') return ['700 13px Rajdhani, sans-serif', 0.12, true];
+    if (k === 'water') return ['italic 600 14px Rajdhani, sans-serif', 0.06, false];
+    return ['600 12.5px Rajdhani, sans-serif', 0.02, false];
+  }
   var measureCtx = null;
   function labelSize(txt, k) {
-    var fs = k === 'city' ? 15 : 13, ls = k === 'region' ? 0.22 : k === 'city' ? 0.08 : 0.12;
-    var font = (k === 'district' ? '700 ' + fs + 'px Rajdhani, sans-serif' : '700 ' + fs + 'px Orbitron, sans-serif');
-    var t = String(txt).toUpperCase(), w = t.length * fs * (k === 'district' ? 0.62 : 0.8);
+    var f = labelFont(k), fs = parseFloat(f[0].match(/(\d+(?:\.\d+)?)px/)[1]);
+    var t = f[2] ? String(txt).toUpperCase() : String(txt), w = t.length * fs * 0.62;
     try {
       if (!measureCtx) measureCtx = document.createElement('canvas').getContext('2d');
-      measureCtx.font = font; w = measureCtx.measureText(t).width;
+      measureCtx.font = f[0]; w = measureCtx.measureText(t).width;
     } catch (e) { /* estimation */ }
-    return [w + t.length * fs * ls + 6, fs + 6];
+    return [w + t.length * fs * f[1] + 8, fs + 6];
   }
-  // n'affiche un libellé que s'il ne chevauche pas un libellé plus important (positions écran au zoom courant)
+  function sizeLabels() { labelItems.forEach(function (it) { var sz = labelSize(it.t, it.k); it.w = sz[0]; it.h = sz[1]; }); }
+  // n'affiche un libellé que s'il ne chevauche pas un libellé plus important (positions écran, vue courante + marge)
+  var placedBoxes = [];
   function updateLabels() {
-    var z = map.getZoom(), placed = [];
+    var z = map.getZoom(), placed = [], size = map.getSize();
+    var tl = map.containerPointToLayerPoint([-250, -150]), br = map.containerPointToLayerPoint([size.x + 250, size.y + 150]);
     labelItems.forEach(function (it) {
       var want = z >= it.minZ && z <= it.maxZ;
       if (want) {
-        var p = map.project([it.l.y, it.l.x], z);
-        var bx = [p.x - it.w / 2, p.y - it.h / 2, p.x + it.w / 2, p.y + it.h / 2];
-        for (var i = 0; i < placed.length; i++) {
-          var q = placed[i];
-          if (bx[0] < q[2] + 4 && bx[2] > q[0] - 4 && bx[1] < q[3] + 2 && bx[3] > q[1] - 2) { want = false; break; }
+        var p = map.latLngToLayerPoint([it.l.y, it.l.x]);
+        if (p.x < tl.x || p.x > br.x || p.y < tl.y || p.y > br.y) want = false;
+        else {
+          var bx = [p.x - it.w / 2, p.y - it.h / 2, p.x + it.w / 2, p.y + it.h / 2];
+          for (var i = 0; i < placed.length; i++) {
+            var q = placed[i];
+            if (bx[0] < q[2] + 6 && bx[2] > q[0] - 6 && bx[1] < q[3] + 3 && bx[3] > q[1] - 3) { want = false; break; }
+          }
+          if (want) placed.push(bx);
         }
-        if (want) placed.push(bx);
       }
       if (want && !it.on) { labelLayer.addLayer(it.mk); it.on = true; }
       else if (!want && it.on) { labelLayer.removeLayer(it.mk); it.on = false; }
     });
+    placedBoxes = placed;
   }
   function updateZoomClass() {
     var c = map.getContainer();
     var z = map.getZoom();
     c.classList.toggle('zhi', opt.amt && z >= AMT_Z);
+    c.classList.toggle('zfar', z < -3.5);
     c.classList.toggle('zmid', z >= -3.5 && z < -1.5);
     c.classList.toggle('znear', z >= -1.5);
   }
+
+  /* ---------- Repérage : thème, grille, échelle, boussole, « Mode PlayStation » ---------- */
+  function inGame(id) { return !!(blips && blips[id] && blips[id].ingame === true); }
+  function hasBlips() { return !!blips && Object.keys(blips).some(function (k) { return blips[k] && typeof blips[k].ingame === 'boolean'; }); }
+  function applyTheme() {
+    document.body.classList.toggle('th-game', theme === 'game');
+    document.body.classList.toggle('th-neon', theme === 'neon');
+    var mt = document.querySelector('meta[name="theme-color"]');
+    if (mt) mt.setAttribute('content', theme === 'game' ? '#1d3346' : '#070b1f');
+  }
+  function setTheme(t) {
+    if (!THEMES[t]) t = 'game';
+    theme = t; store.set('theme', t); applyTheme();
+    if (bm) { bm.setTheme(t); sizeLabels(); updateLabels(); bm.labels.redraw(); }
+    Array.prototype.forEach.call(document.querySelectorAll('#themeSeg button'), function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-th') === t ? 'true' : 'false'); });
+  }
+  function setGrid(on) {
+    opt.grid = !!on; saveOpts();
+    document.body.classList.toggle('grid-on', opt.grid);
+    if (bm) bm.setGrid(opt.grid);
+    var g = $('optGrid'); if (g) g.checked = opt.grid;
+    updateGridEdges();
+  }
+  // PlayStation : seulement les catégories qui ont une icône sur la carte du jeu + celles des préréglages actifs
+  function setPS(on) {
+    on = !!on && hasBlips();
+    if (on === psMode) return;
+    if (on) {
+      store.set('visBeforePS', catOrder.filter(function (id) { return visible[id]; }));
+      var keep = {};
+      PRESETS.forEach(function (p) {
+        if (p.all) return;
+        var ids = presetCats(p.id);
+        if (ids.length && ids.every(function (id) { return visible[id]; })) ids.forEach(function (id) { keep[id] = true; });
+      });
+      catOrder.forEach(function (id) { visible[id] = !!((inGame(id) && !cats[id].hidden) || keep[id]); });
+    } else {
+      var prev = store.get('visBeforePS', null);
+      if (Array.isArray(prev)) { catOrder.forEach(function (id) { visible[id] = false; }); prev.forEach(function (id) { if (cats[id]) visible[id] = true; }); }
+    }
+    psMode = on; store.set('ps', on);
+    document.body.classList.toggle('ps', on);
+    var c = $('optPS'); if (c) c.checked = on;
+    applyVisibility();
+    toast(on ? 'Mode PlayStation : seulement les icônes de la carte du jeu (+ ton préréglage)' : 'Mode PlayStation désactivé');
+  }
+  function buildGameSec() {
+    var seg = $('themeSeg');
+    seg.innerHTML = Object.keys(THEMES).map(function (k) {
+      return '<button type="button" data-th="' + k + '" aria-pressed="' + (theme === k) + '">' + ICONS.use(k === 'game' ? 'ui_map' : 'disco') + THEMES[k] + '</button>';
+    }).join('');
+    Array.prototype.forEach.call(seg.querySelectorAll('button'), function (b) {
+      b.addEventListener('click', function () { setTheme(b.getAttribute('data-th')); toast('Style de carte : ' + THEMES[theme]); });
+    });
+    $('psRow').hidden = !hasBlips();
+    var ps = $('optPS'); ps.checked = psMode;
+    ps.addEventListener('change', function () { setPS(ps.checked); });
+    var g = $('optGrid'); g.checked = opt.grid;
+    g.addEventListener('change', function () { setGrid(g.checked); });
+  }
+
+  // bandeaux de repères de la grille (lettres en haut, chiffres à gauche), échelle et boussole
+  var gridRaf = 0;
+  function initLocate() {
+    var gx = document.createElement('div'); gx.id = 'gridX'; gx.className = 'gedge gx'; gx.setAttribute('aria-hidden', 'true');
+    var gy = document.createElement('div'); gy.id = 'gridY'; gy.className = 'gedge gy'; gy.setAttribute('aria-hidden', 'true');
+    var mi = document.createElement('div'); mi.id = 'mapinfo'; mi.className = 'mapinfo';
+    mi.innerHTML = '<span class="compass" title="Nord en haut, comme sur la carte du jeu" aria-label="Boussole : nord en haut"><svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="14.5"/><path class="n" d="M16 4l4.2 12h-8.4z"/><path class="s" d="M16 28l-4.2-12h8.4z"/><text x="16" y="12.6">N</text></svg></span>' +
+      '<span class="scale" aria-label="Échelle"><i id="scaleBar"></i><b id="scaleTxt"></b></span>';
+    var app = $('app'), anchor = $('legend');
+    app.insertBefore(gx, anchor); app.insertBefore(gy, anchor); app.insertBefore(mi, anchor);
+    var G = bm.G;
+    for (var c = 0; c < G.cols; c++) gx.insertAdjacentHTML('beforeend', '<span>' + G.colName(c) + '</span>');
+    for (var r = 0; r < G.rows; r++) gy.insertAdjacentHTML('beforeend', '<span>' + (r + 1) + '</span>');
+    var sched = function () { if (!gridRaf) gridRaf = requestAnimationFrame(function () { gridRaf = 0; updateGridEdges(); }); };
+    map.on('move zoom viewreset resize', sched);
+    map.on('zoomend', updateScale);
+    document.body.classList.toggle('grid-on', !!opt.grid);
+    L.DomEvent.disableClickPropagation(mi);
+  }
+  function updateGridEdges() {
+    if (!opt.grid || !map || !bm) return;
+    var G = bm.G, size = map.getSize(), s = Math.pow(2, map.getZoom()), cell = G.size * s;
+    var step = cell < 16 ? 3 : cell < 30 ? 2 : 1;
+    var xs = $('gridX').children, ys = $('gridY').children;
+    for (var c = 0; c < xs.length; c++) {
+      var px = map.latLngToContainerPoint([0, G.x0 + (c + 0.5) * G.size]).x;
+      var on = px > 22 && px < size.x - 22 && c % step === 0;
+      xs[c].style.display = on ? '' : 'none';
+      if (on) xs[c].style.transform = 'translateX(' + Math.round(px) + 'px)';
+    }
+    for (var r = 0; r < ys.length; r++) {
+      var py = map.latLngToContainerPoint([G.y1 - (r + 0.5) * G.size, 0]).y;
+      var on2 = py > 20 && py < size.y - 20 && r % step === 0;
+      ys[r].style.display = on2 ? '' : 'none';
+      if (on2) ys[r].style.transform = 'translateY(' + Math.round(py) + 'px)';
+    }
+  }
+  function updateScale() {
+    var s = Math.pow(2, map.getZoom()), maxM = 90 / s, p = Math.pow(10, Math.floor(Math.log(maxM) / Math.LN10)), d = maxM / p;
+    var nice = (d >= 5 ? 5 : d >= 2 ? 2 : 1) * p;
+    $('scaleBar').style.width = Math.round(nice * s) + 'px';
+    $('scaleTxt').textContent = nice >= 1000 ? (nice / 1000) + ' km' : nice + ' m';
+  }
+
+  /* ---------- « Où est-ce sur la carte du jeu ? » ---------- */
+  var DIRS = ['à l\'est', 'au nord-est', 'au nord', 'au nord-ouest', 'à l\'ouest', 'au sud-ouest', 'au sud', 'au sud-est'];
+  function dirWord(dx, dy) { var a = Math.atan2(dy, dx); var k = Math.round(a / (Math.PI / 4)); return DIRS[(k + 8) % 8]; }
+  var anchorCache = null;
+  function anchorList() {
+    if (anchorCache) return anchorCache;
+    var src = anchors.length ? anchors : D.labels.filter(function (l) { return l.k === 'city' || l.k === 'poi' || l.k === 'district'; });
+    anchorCache = src.map(function (a) { return { n: labelText(a), x: a.x, y: a.y, k: a.k || 'landmark', d: typeof a.d === 'string' && anchors.length ? a.d : '' }; });
+    return anchorCache;
+  }
+  function nearestAnchors(m, n) {
+    var list = anchorList().map(function (a) { var d = Math.hypot(a.x - m.x, a.y - m.y); return { a: a, d: d, sc: d * (a.k === 'city' ? 0.85 : 1) }; })
+      .sort(function (p, q) { return p.sc - q.sc; });
+    var out = [];
+    for (var i = 0; i < list.length && out.length < n; i++) {
+      var c = list[i];
+      if (out.some(function (o) { return o.a.n === c.a.n || Math.hypot(o.a.x - c.a.x, o.a.y - c.a.y) < 350; })) continue;
+      if (out.length && c.d > 7000) break;
+      out.push(c);
+    }
+    return out;
+  }
+  function openWhere(m) {
+    var box = $('where'); box.hidden = false;
+    var near = nearestAnchors(m, 3);
+    var pts = [[m.x, m.y]].concat(near.map(function (o) { return [o.a.x, o.a.y]; }));
+    var x0 = Math.min.apply(null, pts.map(function (p) { return p[0]; })), x1 = Math.max.apply(null, pts.map(function (p) { return p[0]; }));
+    var y0 = Math.min.apply(null, pts.map(function (p) { return p[1]; })), y1 = Math.max.apply(null, pts.map(function (p) { return p[1]; }));
+    var wrap = $('whereMap'), w = wrap.clientWidth || 320, h = wrap.clientHeight || 240;
+    var s = Math.min((w - 90) / Math.max(1, x1 - x0), (h - 70) / Math.max(1, y1 - y0));
+    var z = Math.max(-5.5, Math.min(-1.5, Math.log(s) / Math.LN2, Math.log(w / 2500) / Math.LN2));
+    var cv = $('whereCv');
+    var P = bm.renderMini(cv, (x0 + x1) / 2, (y0 + y1) / 2, z, w, h);
+    var ctx = cv.getContext('2d'), game = theme === 'game';
+    // repères : trait pointillé vers le point + pastille + nom
+    near.forEach(function (o, k) {
+      var a = P(o.a.x, o.a.y), b = P(m.x, m.y);
+      ctx.save(); ctx.setLineDash([5, 5]); ctx.lineWidth = 2; ctx.strokeStyle = game ? 'rgba(30,40,60,.55)' : 'rgba(255,255,255,.5)';
+      ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke(); ctx.restore();
+    });
+    near.forEach(function (o, k) {
+      var a = P(o.a.x, o.a.y);
+      ctx.beginPath(); ctx.arc(a[0], a[1], 9, 0, Math.PI * 2); ctx.fillStyle = '#1d2433'; ctx.fill();
+      ctx.lineWidth = 2; ctx.strokeStyle = '#fff'; ctx.stroke();
+      ctx.font = '700 11px Rajdhani, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#fff'; ctx.fillText(String(k + 1), a[0], a[1] + 0.5);
+      ctx.font = '700 13px Rajdhani, sans-serif'; ctx.lineJoin = 'round';
+      var bp = P(m.x, m.y), tw2 = ctx.measureText(o.a.n).width / 2 + 6;
+      var tx = Math.max(tw2, Math.min(w - tw2, a[0])), ty = a[1] + (a[1] > h - 30 ? -18 : 19);
+      if (Math.abs(ty - bp[1]) < 22 && Math.abs(tx - bp[0]) < tw2 + 16) ty = a[1] + (ty > a[1] ? -19 : 19);   // ne cache pas le point
+      if (Math.abs(ty - bp[1]) < 22 && Math.abs(tx - bp[0]) < tw2 + 16) tx = bp[0] + (a[0] >= bp[0] ? 1 : -1) * (tw2 + 20);
+      ctx.lineWidth = 4; ctx.strokeStyle = game ? 'rgba(255,255,255,.95)' : 'rgba(10,7,32,.95)'; ctx.strokeText(o.a.n, tx, ty);
+      ctx.fillStyle = game ? '#1f2633' : '#e6e0ff'; ctx.fillText(o.a.n, tx, ty);
+    });
+    var c = cats[m.c], p = P(m.x, m.y);
+    ctx.beginPath(); ctx.arc(p[0], p[1], 22, 0, Math.PI * 2); ctx.fillStyle = 'rgba(255,46,151,.22)'; ctx.fill();
+    ctx.beginPath(); ctx.arc(p[0], p[1], 10, 0, Math.PI * 2); ctx.fillStyle = c.color; ctx.fill();
+    ctx.lineWidth = 3; ctx.strokeStyle = '#ffffff'; ctx.stroke();
+    ctx.beginPath(); ctx.arc(p[0], p[1], 13.5, 0, Math.PI * 2); ctx.lineWidth = 1.5; ctx.strokeStyle = '#ff2e97'; ctx.stroke();
+    // consignes
+    var cell = bm.G.cellOf(m.x, m.y), street = bm.nearestStreet(m.x, m.y, 140), h2 = '';
+    if (near.length) {
+      var f = near[0];
+      h2 += '<li><span class="wn">1</span><p>Sur la carte du jeu, repère <b>' + esc(f.a.n) + '</b>.' + (f.a.d ? '<small class="wd">' + esc(f.a.d) + '</small>' : '') + '</p></li>';
+      h2 += '<li><span class="wn pt">' + ICONS.use('ui_target') + '</span><p>' + (f.d < 90 ? 'Le point est <b>juste à côté</b>.' : 'Le point est à <b>' + esc(fmtKm(f.d)) + ' ' + dirWord(m.x - f.a.x, m.y - f.a.y) + '</b> de ce repère.') + '</p></li>';
+      if (near.length > 1) h2 += '<li><span class="wn">' + (near.length > 2 ? '2·3' : '2') + '</span><p>Pour vérifier : ' + near.slice(1).map(function (o) { return esc(fmtKm(o.d)) + ' ' + dirWord(m.x - o.a.x, m.y - o.a.y) + ' de <b>' + esc(o.a.n) + '</b>'; }).join(', ') + '.</p></li>';
+    }
+    var extra = [];
+    if (street) extra.push('près de <b>' + esc(street) + '</b>');
+    extra.push('quartier : <b>' + esc(zoneOf(m)) + '</b>');
+    if (cell) extra.push('case <b>' + cell + '</b> de la grille');
+    h2 += '<li><span class="wn">' + ICONS.use('ui_grid') + '</span><p>' + extra.join(' · ') + '.</p></li>';
+    if (blips && blips[m.c]) h2 += '<li><span class="wn">' + ICONS.use(inGame(m.c) ? 'eye' : 'ui_eyeoff') + '</span><p>' + (inGame(m.c) ? 'Ce type de lieu a une <b>icône sur la carte du jeu</b>.' : 'Ce point n\'a <b>pas d\'icône</b> sur la carte du jeu : vise l\'endroit avec les repères.') + '</p></li>';
+    $('whereSteps').innerHTML = h2;
+    $('whereT').textContent = 'Où est-ce sur la carte du jeu ?';
+    $('whereSub').textContent = m.n;
+    $('whereGo').onclick = function () { closeWhere(); map.setView([m.y, m.x], Math.max(map.getZoom(), -1)); flash(m); };
+  }
+  function closeWhere() { $('where').hidden = true; }
 
   /* ---------- Zones rentables ---------- */
   function drawZones() {
@@ -609,7 +785,7 @@
   /* ---------- Marqueurs ---------- */
   function iconFor(m) {
     var c = cats[m.c];
-    var cls = 'mk' + (m.approx ? ' ap' : '') + (done[m.id] ? ' dn' : '') + (fav[m.id] ? ' fv' : '') + (selected === m ? ' sel' : '') + (m.tier >= 0 ? ' t' + m.tier : '') + (m.rt ? ' rt' : '');
+    var cls = 'mk' + (m.approx ? ' ap' : '') + (done[m.id] ? ' dn' : '') + (fav[m.id] ? ' fv' : '') + (selected === m ? ' sel' : '') + (m.tier >= 0 ? ' t' + m.tier : '') + (m.rt ? ' rt' : '') + (blips && !inGame(m.c) ? ' ng' : '');
     var key = m.c + '|' + cls + '|' + m.amtLbl;
     var ic = iconCache[key];
     if (!ic) {
@@ -719,7 +895,7 @@
         '<button type="button" class="gtoggle" aria-expanded="' + (openG.indexOf(g.id) >= 0) + '">' + esc(g.n) + '<span class="gcount"></span>' + ICONS.use('ui_chev') + '</button></div><div class="glist">';
       g.cats.forEach(function (c) {
         h += '<button type="button" class="cat" role="checkbox" aria-checked="false" data-c="' + esc(c.id) + '" style="--c:' + esc(c.color) + '">' +
-          '<span class="dot">' + ICONS.use(c.icon) + '</span><span class="cn">' + esc(c.n) + '<small><b></b></small></span><span class="cc"></span><span class="ck">' + ICONS.use('ui_check') + '</span></button>';
+          '<span class="dot">' + ICONS.use(c.icon) + '</span><span class="cn">' + esc(c.n) + (inGame(c.id) ? '<i class="ig" title="Icône visible sur la carte du jeu">' + ICONS.use('gamepad') + '</i>' : '') + '<small><b></b></small></span><span class="cc"></span><span class="ck">' + ICONS.use('ui_check') + '</span></button>';
       });
       el.innerHTML = h + '</div>';
       wrap.appendChild(el);
@@ -759,6 +935,7 @@
     });
     buildFilters();
     buildDisplay();
+    buildGameSec();
     buildTabs();
   }
 
@@ -1034,13 +1211,60 @@
       });
       box.appendChild(b);
     });
+    // lieux (quartiers, villes, plans d'eau…) et rues
+    var KN = { region: 'Région', city: 'Ville', district: 'Quartier', poi: 'Lieu', water: 'Eau' };
+    var placeHits = D.labels.filter(function (l) {
+      var k = norm(labelText(l)) + ' ' + norm(l.n);
+      return toks.every(function (t) { return k.indexOf(t) >= 0; });
+    }).slice(0, 3);
+    placeHits.forEach(function (l) {
+      var b = document.createElement('button');
+      b.type = 'button'; b.className = 'res place'; b.setAttribute('role', 'option');
+      b.innerHTML = '<span class="dot plc">' + ICONS.use(l.k === 'water' ? 'drop' : 'ui_map') + '</span><span class="rt"><span class="rn">' + esc(labelText(l)) + '</span><span class="rc">' + (KN[l.k] || 'Lieu') + (labelText(l) !== l.n ? ' · ' + esc(l.n) : '') + (bm ? ' · case ' + bm.G.cellOf(l.x, l.y) : '') + '</span></span>';
+      b.addEventListener('click', function () {
+        closeResults(); $('q').blur(); if (!isWide()) closePanel();
+        var zz = { region: -4, city: -2.5, district: -1, water: -2.5, poi: 0 }[l.k];
+        map.setView([l.y, l.x], Math.max(map.getZoom(), zz == null ? -1 : zz, typeof l.minZoom === 'number' ? l.minZoom + 0.5 : -6));
+        pulseAt(l.x, l.y);
+      });
+      box.appendChild(b);
+    });
+    if (bm && nq.length >= 3) bm.findStreets(function (n) { var k = norm(n); return toks.every(function (t) { return k.indexOf(t) >= 0; }); }, 3).forEach(function (st) {
+      var b = document.createElement('button');
+      b.type = 'button'; b.className = 'res place'; b.setAttribute('role', 'option');
+      var mid = st.pts[Math.floor(st.pts.length / 2)];
+      b.innerHTML = '<span class="dot plc">' + ICONS.use('ui_road') + '</span><span class="rt"><span class="rn">' + esc(st.n) + '</span><span class="rc">Rue · ' + esc(zoneOf({ x: mid[0], y: mid[1] })) + '</span></span>';
+      b.addEventListener('click', function () {
+        closeResults(); $('q').blur(); if (!isWide()) closePanel();
+        map.fitBounds(L.latLngBounds([st.bb[1], st.bb[0]], [st.bb[3], st.bb[2]]), { padding: [70, 70], maxZoom: 0.5 });
+        showStreet(st.pts);
+      });
+      box.appendChild(b);
+    });
     res.slice(0, 50).forEach(function (r) { box.appendChild(resultRow(r[1])); });
-    if (!res.length && !catHits.length) box.innerHTML = '<div class="res-empty">Aucun résultat pour « ' + esc(q) + ' ».</div>';
+    if (!res.length && !catHits.length && !box.querySelector('.place')) box.innerHTML = '<div class="res-empty">Aucun résultat pour « ' + esc(q) + ' ».</div>';
     else if (res.length > 50) box.insertAdjacentHTML('beforeend', '<div class="res-empty small">' + (res.length - 50) + ' autres résultats : précisez la recherche.</div>');
     box.hidden = false;
     box.scrollTop = 0;
   }
   function closeResults() { $('results').hidden = true; }
+  // surbrillance temporaire d'une rue ou d'un lieu trouvé par la recherche
+  var hiLayer = null, hiT = 0;
+  function clearHi() { if (hiLayer) { map.removeLayer(hiLayer); hiLayer = null; } clearTimeout(hiT); }
+  function showStreet(pts) {
+    clearHi();
+    var ll = pts.map(function (p) { return [p[1], p[0]]; });
+    hiLayer = L.layerGroup([
+      L.polyline(ll, { pane: 'route', color: '#ff2e97', weight: 12, opacity: 0.35, interactive: false, lineCap: 'round' }),
+      L.polyline(ll, { pane: 'route', color: '#ff2e97', weight: 4, opacity: 0.95, interactive: false, lineCap: 'round' })
+    ]).addTo(map);
+    hiT = setTimeout(clearHi, 6000);
+  }
+  function pulseAt(x, y) {
+    clearHi();
+    hiLayer = L.marker([y, x], { pane: 'route', interactive: false, keyboard: false, icon: L.divIcon({ className: 'pulse', iconSize: [0, 0], html: '<i></i>' }) }).addTo(map);
+    hiT = setTimeout(clearHi, 3500);
+  }
   function showTopValue() {
     var real = markers.filter(function (m) { return realValue(m.v) > 0; }).sort(function (a, b) { return realValue(b.v) - realValue(a.v); });
     var est = markers.filter(function (m) { return !realValue(m.v) && m.v && m.v.base; }).sort(function (a, b) { return b.v.base - a.v.base; });
@@ -1065,15 +1289,15 @@
   /* ---------- Fiche ---------- */
   var nearLabels = null;
   function zoneOf(m) {
-    if (!nearLabels) nearLabels = D.labels.filter(function (l) { return l.k !== 'region'; });
+    if (!nearLabels) nearLabels = D.labels.filter(function (l) { return l.k === 'city' || l.k === 'district'; });
     var best = null, bd = Infinity, bestD = null, bdD = Infinity;
     nearLabels.forEach(function (l) {
       var d = Math.hypot(l.x - m.x, l.y - m.y);
       if (l.k === 'district') { if (d < bdD) { bdD = d; bestD = l; } }
       else if (d < bd) { bd = d; best = l; }
     });
-    if (bestD && bdD < 1200) return bestD.n + (best && bd < 3500 && best.n !== bestD.n ? ', ' + best.n : '');
-    if (best && bd < 3500) return (bd > 1200 ? 'Environs de ' : '') + best.n;
+    if (bestD && bdD < 1200) return labelText(bestD) + (best && bd < 3500 && best.n !== bestD.n ? ', ' + labelText(best) : '');
+    if (best && bd < 3500) return (bd > 1200 ? 'Environs de ' : '') + labelText(best);
     return 'Leonida';
   }
 
@@ -1244,13 +1468,14 @@
     var me = store.get('me', null);
     var h = routeStrip(m) +
       '<div class="shd" style="--c:' + esc(c.color) + '"><span class="bigdot">' + ICONS.use(c.icon) + '</span><div class="sht"><h2>' + esc(m.n) + '</h2>' +
-      '<div class="shm"><span class="pill"><i></i>' + esc(c.n) + '</span><span class="zn">' + ICONS.use('ui_me') + esc(zoneOf(m)) + '</span></div></div>' +
+      '<div class="shm"><span class="pill"><i></i>' + esc(c.n) + '</span><span class="zn">' + ICONS.use('ui_me') + esc(zoneOf(m)) + '</span>' + gameBadge(m) + '</div></div>' +
       moneyBadges(m) + secLine(m) + '</div>' +
       (m.g ? '<div class="howto"><span class="hti">' + ICONS.use('ui_compass') + '</span><div><b>Comment le trouver dans le jeu</b><p>' + esc(m.g) + '</p></div></div>' : '') +
       infoBlock(m) + moneyNote(m);
     if (m.approx) h += '<div class="approx">◌ Position approximative</div>';
     h += m.d ? '<p class="desc">' + esc(m.d) + '</p>' : '<p class="desc empty">Pas encore de description pour ce point.</p>';
     if (me) h += '<div class="dist">' + fmtDist(Math.hypot(me[0] - m.x, me[1] - m.y)) + ' de « Je suis ici » (à vol d\'oiseau)</div>';
+    h += '<button type="button" class="btn wherebtn" id="actWhere">' + ICONS.use('gamepad') + '<span>Où est-ce sur la carte du jeu ?<small>' + esc(whereHint(m)) + '</small></span>' + ICONS.use('ui_chev') + '</button>';
     h += '<div class="acts">' +
       '<button type="button" class="btn tog done" id="actDone" aria-pressed="' + !!done[m.id] + '">' + ICONS.use('ui_check') + (done[m.id] ? 'Fait' : 'Trouvé / fait') + '</button>' +
       '<button type="button" class="btn tog fav" id="actFav" aria-pressed="' + !!fav[m.id] + '">' + ICONS.use('ui_star') + (fav[m.id] ? 'En favori' : 'Favori') + '</button>' +
@@ -1261,6 +1486,7 @@
     $('actDone').addEventListener('click', function () { toggleDone(m); });
     $('actFav').addEventListener('click', function () { toggleFav(m); });
     $('actCopy').addEventListener('click', function () { copyCoords(m); });
+    $('actWhere').addEventListener('click', function () { openWhere(m); });
     var al = $('actLine'); if (al) al.addEventListener('click', function () { toggleLine(m); });
     if ($('rtQuit')) {
       $('rtQuit').addEventListener('click', function () { stopRoute(); });
@@ -1271,6 +1497,16 @@
     if (document.body.classList.contains('sheet-open') && !isWide()) document.body.style.setProperty('--sheeth', $('sheet').offsetHeight + 'px');
   }
 
+  function gameBadge(m) {
+    if (!blips || !blips[m.c] || typeof blips[m.c].ingame !== 'boolean') return '';
+    var on = blips[m.c].ingame, note = typeof blips[m.c].note === 'string' ? blips[m.c].note : '';
+    return '<span class="gbadge ' + (on ? 'on' : 'off') + '"' + (note ? ' title="' + esc(note) + '"' : '') + '>' + ICONS.use(on ? 'eye' : 'ui_eyeoff') + (on ? 'Visible sur la carte du jeu' : 'Caché en jeu') + '</span>';
+  }
+  function whereHint(m) {
+    var n = nearestAnchors(m, 1)[0], cell = bm ? bm.G.cellOf(m.x, m.y) : '';
+    var t = n ? (n.d < 90 ? 'Juste à côté de ' + n.a.n : fmtKm(n.d) + ' ' + dirWord(m.x - n.a.x, m.y - n.a.y) + ' de ' + n.a.n) : '';
+    return t + (cell ? (t ? ' · ' : '') + 'case ' + cell : '');
+  }
   function toggleDone(m, quiet) {
     if (done[m.id]) { delete done[m.id]; cats[m.c].ndone--; } else { done[m.id] = true; cats[m.c].ndone++; }
     store.set('done', Object.keys(done));
@@ -1490,6 +1726,8 @@
       map.setView([me[1], me[0]], Math.max(map.getZoom(), -1));
     });
     $('btnLegend').addEventListener('click', toggleLegend);
+    $('whereClose').addEventListener('click', closeWhere);
+    $('where').addEventListener('click', function (e) { if (e.target === this) closeWhere(); });
     $('rpResume').addEventListener('click', function () { if (route) goStep(route.idx); });
     $('rpQuit').addEventListener('click', stopRoute);
     var q = $('q');
@@ -1504,7 +1742,8 @@
     document.addEventListener('keydown', function (e) {
       if (e.key !== 'Escape') return;
       if (mybgBusy()) return;
-      if (placingMe) setPlacing(false);
+      if (!$('where').hidden) closeWhere();
+      else if (placingMe) setPlacing(false);
       else if (!$('results').hidden) closeResults();
       else if (!$('legendBox').hidden) closeLegend();
       else if (selected) closeSheet();
@@ -1540,6 +1779,8 @@
         showError('Aucune donnée de carte trouvée. Vérifiez que le dossier « data » contient markers.json et categories.json, puis réessayez.');
         return;
       }
+      applyTheme();
+      document.body.classList.toggle('ps', psMode);
       initMap();
       buildPanel();
       bindUI();
@@ -1558,7 +1799,9 @@
       setTimeout(function () { l.hidden = true; }, 400);
       window.GTA6_APP = { map: map, markers: markers, cats: cats, visible: visible, cluster: cluster, openSheet: openSheet, closeSheet: closeSheet, focusMarker: focusMarker, applyVisibility: applyVisibility,
         routes: routes, zones: zones, startRoute: startRoute, stopRoute: stopRoute, goStep: goStep, setTab: setTab, openPanel: openPanel, closePanel: closePanel,
-        filters: F, opts: opt, route: function () { return route; }, labels: function () { return labelItems.filter(function (it) { return it.on; }).map(function (it) { return it.l.n; }); } };
+        filters: F, opts: opt, route: function () { return route; }, labels: function () { return labelItems.filter(function (it) { return it.on; }).map(function (it) { return it.t; }); },
+        basemap: function () { return bm; }, setTheme: setTheme, setGrid: setGrid, setPS: setPS, ps: function () { return psMode; }, openWhere: openWhere, inGame: inGame };
+      updateScale(); updateGridEdges();
     }, function () {
       showError('Données de la carte introuvables ou illisibles. Vérifiez votre connexion (ou le dossier « data »), puis réessayez.');
     });
