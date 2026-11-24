@@ -324,7 +324,7 @@
     }
     var o = store.get('opts', null);
     if (o && typeof o === 'object') {
-      opt.amt = o.amt !== false; opt.size = !!o.size; opt.zones = o.zones !== false; opt.grid = !!o.grid; opt.chap = o.chap !== false;
+      opt.amt = o.amt !== false; opt.size = !!o.size; opt.zones = o.zones !== false; opt.grid = !!o.grid; opt.chap = o.chap !== false; opt.bldg = o.bldg !== false;
       if (o.zk && typeof o.zk === 'object') opt.zk = o.zk;
     }
     if (!has.amt) F.min = 0;
@@ -404,13 +404,16 @@
     B.forEach(function (b) {
       if (typeof b.x !== 'number' || typeof b.y !== 'number') return;
       var h = Math.max(6, Math.min(60, (b.s || 18))) / 2;
-      var r = L.rectangle([[b.y - h, b.x - h], [b.y + h, b.x + h]], { renderer: rnd, stroke: true, weight: 0.6, color: 'rgba(40,50,70,.45)',
-        fillColor: BLDG_COL[b.k] || BLDG_COL.other, fillOpacity: 0.9, interactive: !!b.n, bubblingMouseEvents: false });
+      var r = L.rectangle([[b.y - h, b.x - h], [b.y + h, b.x + h]], { renderer: rnd, stroke: true, weight: 1, color: 'rgba(30,40,60,.7)',
+        fillColor: BLDG_COL[b.k] || BLDG_COL.other, fillOpacity: 1, interactive: !!b.n, bubblingMouseEvents: false });
       if (b.n) r.on('click', function () { toast(b.n); });
       r.addTo(lay);
     });
-    function upd() { var on = map.getZoom() >= -1.5; if (on && !map.hasLayer(lay)) lay.addTo(map); else if (!on && map.hasLayer(lay)) map.removeLayer(lay); }
+    function upd() { var on = opt.bldg !== false && map.getZoom() >= -3; if (on && !map.hasLayer(lay)) lay.addTo(map); else if (!on && map.hasLayer(lay)) map.removeLayer(lay); }
     map.on('zoomend', upd); upd();
+    var c = $('optBldg'), row = $('bldgRow');
+    if (row) row.hidden = false;
+    if (c) { c.checked = opt.bldg !== false; c.addEventListener('change', function () { opt.bldg = c.checked; saveOpts(); upd(); toast(c.checked ? 'Bâtiments affichés (zoome sur un quartier)' : 'Bâtiments masqués'); }); }
   }
 
   /* ---------- Carte ---------- */
@@ -1784,7 +1787,12 @@
       if (!/^https?:$/.test(location.protocol)) return;
       if (window.self !== window.top) return; // iframe : pas de SW
       if (!('serviceWorker' in navigator)) return;
-      navigator.serviceWorker.register('sw.js').catch(function () { /* ignoré */ });
+      var hadCtrl = !!navigator.serviceWorker.controller, reloaded = false;
+      navigator.serviceWorker.addEventListener('controllerchange', function () {
+        // nouvelle version installée : on recharge une fois pour l'afficher tout de suite
+        if (hadCtrl && !reloaded) { reloaded = true; try { toast('Nouvelle version de la carte installée'); } catch (e) { /* */ } setTimeout(function () { location.reload(); }, 600); }
+      });
+      navigator.serviceWorker.register('sw.js').then(function (r) { try { r.update(); } catch (e) { /* */ } }).catch(function () { /* ignoré */ });
     } catch (e) { /* SW refusé (sandbox) : la page marche sans */ }
   }
 
