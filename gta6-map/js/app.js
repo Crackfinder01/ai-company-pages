@@ -1745,8 +1745,8 @@
     var h = routeStrip(m) +
       '<div class="shd" style="--c:' + esc(c.color) + '"><span class="bigdot">' + ICONS.use(c.icon) + '</span><div class="sht"><h2>' + esc(m.n) + '</h2>' +
       '<div class="shm"><span class="pill"><i></i>' + esc(c.n) + '</span><span class="zn">' + ICONS.use('ui_me') + esc(m.q || zoneOf(m)) + '</span>' + gameBadge(m) + (m.ch ? '<span class="chapbadge">Planque du chapitre ' + m.ch.join(' et ') + '</span>' : '') + '</div></div>' +
-      moneyBadges(m) + secLine(m) + '</div>' +
-      howtoBlock(m) + photoBtn() + bldStrip(m) +
+      photoBtn() + moneyBadges(m) + secLine(m) + '</div>' +
+      howtoBlock(m) + bldStrip(m) +
       infoBlock(m) + moneyNote(m);
     if (m.approx) h += '<div class="approx">◌ Position approximative</div>';
     h += m.d ? '<p class="desc">' + esc(m.d) + '</p>' : '<p class="desc empty">Pas encore de description pour ce point.</p>';
@@ -1800,8 +1800,8 @@
   function hasPhoto() { return !!(window.GTA6_MYBG && typeof window.GTA6_MYBG.locateOnPhoto === 'function'); }
   function photoBtn() {
     if (!hasPhoto()) return '';
-    return '<div class="photobox"><button type="button" class="btn photobtn" id="actPhoto">' + ICONS.use('camera') + '<span>Trouver ce point sur ma photo de la PS5</span>' + ICONS.use('ui_chev') + '</button>' +
-      '<p class="photohelp">Sur ta PS5, centre la carte sur la zone, prends une photo, l\'app te montre le point exact dessus.</p></div>';
+    return '<div class="photobox"><button type="button" class="btn photobtn" id="actPhoto">' + ICONS.use('camera') + '<span>Point exact sur ma photo de la PS5</span>' + ICONS.use('ui_chev') + '</button>' +
+      '<p class="photohelp">1. Sur ta PS5, centre la carte sur ce quartier et zoome jusqu\'à voir les icônes des magasins. 2. Touche ce bouton et prends la photo de la télé. 3. Le point exact s\'affiche sur ta photo.</p></div>';
   }
   // centre la carte sur le repère et trace un trait pointillé repère -> point
   var refLayer = null;

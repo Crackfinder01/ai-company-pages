@@ -3300,7 +3300,8 @@
     if (loc.step >= 0) {
       var r = loc.refs[loc.step];
       h = '<p>Étape ' + (loc.step + 1) + ' sur 2 : touche sur ta photo <b>l\'icône ' + X.esc(r.n) + '</b>' + (r.dist ? ' (le point est à ~' + r.dist + ' m ' + (/^[aeiou]/.test(r.dir) ? 'à l\'' : 'au ') + r.dir + ' de cette icône)' : '') +
-        '. Zoome avec deux doigts si besoin.</p><div class="rowbtns"><button type="button" class="btn" id="mblCancel">' + ICONS.use('ui_undo') + 'Annuler</button></div>';
+        '. Zoome avec deux doigts si besoin.</p>' + (loc.step === 0 && !loc.tf ? '<p class="mid">Tu ne vois pas cette icône ? Ta photo est sans doute trop dézoomée : sur la PS5, zoome jusqu\'à voir les icônes des magasins autour du point, puis reprends la photo.</p>' : '') +
+        '<div class="rowbtns"><button type="button" class="btn" id="mblCancel">' + ICONS.use('ui_undo') + 'Annuler</button>' + '<button type="button" class="btn" id="mblRetake">' + ICONS.use('ui_image') + 'Reprendre une photo</button>' + '</div>';
     } else if (loc.tf) {
       var acc = Math.max(5, Math.round(loc.sig / 5) * 5);
       h = '<p class="' + (loc.conf === 'good' || loc.conf === 'main' ? 'ok' : 'mid') + '">' + (loc.conf === 'good' || loc.conf === 'main' ?
@@ -3308,15 +3309,22 @@
         '<b class="q">Position probable</b> (à ~' + acc + ' m près) : vérifie que les petits points tombent sur les icônes du jeu. Sinon, montre 2 icônes.') + '</p>' +
         '<div class="rowbtns">' + (loc.refs.length >= 2 ? '<button type="button" class="btn" id="mblGuide">' + ICONS.use('ui_center') + 'Montrer 2 icônes</button>' : '') +
         (loc.kept ? '<button type="button" class="btn" disabled>' + ICONS.use('ui_check') + 'Gardée comme fond</button>' :
-          '<button type="button" class="btn primary" id="mblKeep">' + ICONS.use('ui_image') + 'Garder comme fond de carte</button>') + '</div>';
+          '<button type="button" class="btn primary" id="mblKeep">' + ICONS.use('ui_image') + 'Garder comme fond de carte</button>') + '<button type="button" class="btn" id="mblRetake">' + ICONS.use('ui_image') + 'Reprendre une photo</button>' + '</div>';
     } else {
-      h = '<p>L\'app n\'a pas trouvé ce point sur ta photo' + (loc.refs.length >= 2 ? '.' : ' et il n\'y a pas d\'icône du jeu connue à côté. Reprends une photo plus zoomée, centrée sur le point.') + '</p>' +
+      h = '<p>L\'app n\'a pas trouvé ce point sur ta photo' + (loc.refs.length >= 2 ? '. Montre-lui 2 icônes, ou reprends une photo plus zoomée (on doit voir les icônes des magasins autour du point).' : ' et il n\'y a pas d\'icône du jeu connue à côté. Reprends une photo plus zoomée, centrée sur le point.') + '</p>' +
         '<div class="rowbtns">' + (loc.refs.length >= 2 ? '<button type="button" class="btn primary" id="mblGuide">' + ICONS.use('ui_center') + 'Montrer 2 icônes</button>' : '') +
-        '<button type="button" class="btn" id="mblClose2">' + ICONS.use('ui_close') + 'Fermer</button></div>';
+        '<button type="button" class="btn" id="mblRetake">' + ICONS.use('ui_image') + 'Reprendre une photo</button>' + '<button type="button" class="btn" id="mblClose2">' + ICONS.use('ui_close') + 'Fermer</button></div>';
     }
     c.innerHTML = h;
     var on = function (id, fn) { var e = $(id); if (e) e.addEventListener('click', fn); };
-    on('mblGuide', locGuide); on('mblCancel', function () { loc.step = -1; loc.taps = []; locDraw(); }); on('mblKeep', locKeep); on('mblClose2', locClose);
+    on('mblGuide', locGuide); on('mblCancel', function () { loc.step = -1; loc.taps = []; locDraw(); }); on('mblKeep', locKeep); on('mblClose2', locClose); on('mblRetake', locRetake);
+  }
+  function locRetake() {
+    if (!loc) return;
+    var m = loc.m;
+    if (loc.it && !loc.kept) quietRemove(loc.it);
+    loc = { m: m, it: null };
+    var f = $('mblFile'); f.value = ''; f.click();
   }
   function locGuide() {
     if (!loc || loc.refs.length < 2) { locCard(); return; }
