@@ -558,6 +558,186 @@
     return Math.hypot(x - a[0] - t * dx, y - a[1] - t * dy);
   }
 
+  /* ---------- Bâtiments : rectangles orientés (w, h, a), ombre portée + toit plus clair (2,5D discret) ---------- */
+  // couleurs par thème : vides = neutres ; avec contenu = teinte de la catégorie principale (mélangée au thème)
+  var BLDG = {
+    game: { shadow: 'rgba(38,52,78,.20)', wall: '#b3bbc8', roof: '#dfe3ea', line: 'rgba(104,116,138,.55)', far: '#c3cad5',
+      mixRoof: ['#ffffff', 0.5], mixWall: ['#3b4354', 0.42], mixLine: ['#1d2330', 0.3], sel: '#ffffff', pill: 'rgba(255,255,255,.94)', pillTxt: '#1f2530' },
+    neon: { shadow: 'rgba(0,0,0,.5)', wall: '#0e0b2c', roof: '#29235f', line: 'rgba(140,128,255,.32)', far: '#2a2462',
+      mixRoof: ['#1b1647', 0.6], mixWall: ['#05030f', 0.62], mixLine: ['#ffffff', 0.1], sel: '#ffffff', pill: 'rgba(7,11,31,.92)', pillTxt: '#ffffff' }
+  };
+  var LIFT = { tower: 9, hotel: 6, bank: 4.5, landmark: 5, warehouse: 3.5, store: 3, villa: 3, house: 2.5, other: 3 };
+  var BCELL = 400;
+  var mixCache = {};
+  function mix(c1, c2, t) {
+    var k = c1 + c2 + t;
+    if (mixCache[k]) return mixCache[k];
+    var h = function (c) { c = c.replace('#', ''); if (c.length === 3) c = c[0] + c[0] + c[1] + c[1] + c[2] + c[2]; return [0, 2, 4].map(function (i) { return parseInt(c.substr(i, 2), 16) || 0; }); };
+    var a = h(c1), b = h(c2);
+    return (mixCache[k] = 'rgb(' + a.map(function (v, i) { return Math.round(v + (b[i] - v) * t); }).join(',') + ')');
+  }
+  function bldgIndex(list) {
+    var I = { cells: {}, list: list };
+    list.forEach(function (b) {
+      var k = Math.floor(b.x / BCELL) + ':' + Math.floor(b.y / BCELL);
+      (I.cells[k] || (I.cells[k] = [])).push(b);
+    });
+    return I;
+  }
+  function bldgIn(I, x0, y0, x1, y1) {
+    var out = [];
+    for (var gx = Math.floor(x0 / BCELL); gx <= Math.floor(x1 / BCELL); gx++) {
+      for (var gy = Math.floor(y0 / BCELL); gy <= Math.floor(y1 / BCELL); gy++) {
+        var c = I.cells[gx + ':' + gy];
+        if (c) for (var i = 0; i < c.length; i++) out.push(c[i]);
+      }
+    }
+    return out;
+  }
+  // coins écran (px CSS) d'un bâtiment, sens horaire à l'écran ; taille mini (px) pour rester lisible au dézoom
+  function bldgCorners(b, T, minPx) {
+    var s = T.s, cx = (b.x - T.ox) * s, cy = (T.oy - b.y) * s;
+    var hw = Math.max(minPx, b.w * s / 2), hh = Math.max(minPx * 0.75, b.h * s / 2);
+    var a = (b.a || 0) * Math.PI / 180, ca = Math.cos(a), sa = Math.sin(a);
+    var out = [], U = [-1, 1, 1, -1], V = [1, 1, -1, -1];
+    for (var i = 0; i < 4; i++) { var u = U[i] * hw, v = V[i] * hh; out.push([cx + ca * u - sa * v, cy - (sa * u + ca * v)]); }
+    return { c: out, cx: cx, cy: cy };
+  }
+  function polyTo(ctx, p, dx, dy) {
+    // sens positif imposé : les morceaux d'un même chemin s'additionnent (règle nonzero, pas de trous)
+    var area = 0;
+    for (var i = 0; i < p.length; i++) { var q = p[(i + 1) % p.length]; area += p[i][0] * q[1] - q[0] * p[i][1]; }
+    var n = p.length;
+    if (area >= 0) { ctx.moveTo(p[0][0] + dx, p[0][1] + dy); for (var j = 1; j < n; j++) ctx.lineTo(p[j][0] + dx, p[j][1] + dy); }
+    else { ctx.moveTo(p[n - 1][0] + dx, p[n - 1][1] + dy); for (var k = n - 2; k >= 0; k--) ctx.lineTo(p[k][0] + dx, p[k][1] + dy); }
+    ctx.closePath();
+  }
+  // volume extrudé : base + base décalée + faces latérales (enveloppe)
+  function extrudeTo(ctx, c, tx, ty) {
+    polyTo(ctx, c, 0, 0); polyTo(ctx, c, tx, ty);
+    for (var i = 0; i < 4; i++) {
+      var a = c[i], b = c[(i + 1) % 4];
+      polyTo(ctx, [a, b, [b[0] + tx, b[1] + ty], [a[0] + tx, a[1] + ty]], 0, 0);
+    }
+  }
+  // o : { content, all, sel, minZ, detailZ } ; chaque bâtiment : x, y, w, h, a, k, col (couleur catégorie si contenu affiché), tc / tn (pastille de valeur)
+  function drawBuildings(I, ctx, T, th, o) {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, T.w * T.r, T.h * T.r);
+    if (!I || T.z < o.minZ - 0.01 || (!o.content && !o.all)) return 0;
+    var C = BLDG[th.neon ? 'neon' : 'game'], s = T.s, z = T.z;
+    var x0 = T.ox - 80, x1 = T.ox + T.w / s + 80, y1 = T.oy + 80, y0 = T.oy - T.h / s - 80;
+    var list = bldgIn(I, x0, y0, x1, y1), empty = [], full = [], sel = null;
+    for (var i = 0; i < list.length; i++) {
+      var b = list[i];
+      if (b.x < x0 || b.x > x1 || b.y < y0 || b.y > y1) continue;
+      if (b.col) { if (o.content || o.all) full.push(b); } else if (o.all || (o.content && b.ref)) empty.push(b);   // ref : contient un repère gris du jeu
+      if (o.sel === b) sel = b;
+    }
+    // du nord au sud : les toits du sud recouvrent les façades du nord
+    var byY = function (p, q) { return q.y - p.y; };
+    empty.sort(byY); full.sort(byY);
+    ctx.setTransform(T.r, 0, 0, T.r, 0, 0);
+    ctx.lineJoin = 'round';
+    var detail = z >= o.detailZ, n = 0;
+    var E = empty.map(function (b) { return bldgCorners(b, T, 1.2); });
+    var F = full.map(function (b) { return bldgCorners(b, T, 2.4); });
+    n = E.length + F.length;
+    if (!detail) {
+      // vue « ville » : simples aplats (2 remplissages), contenus plus marqués
+      if (E.length) { ctx.beginPath(); E.forEach(function (g) { polyTo(ctx, g.c, 0, 0); }); ctx.fillStyle = C.far; ctx.fill(); }
+      var groups = {};
+      F.forEach(function (g, k) { (groups[full[k].col] || (groups[full[k].col] = [])).push(g); });
+      Object.keys(groups).forEach(function (col) {
+        ctx.beginPath(); groups[col].forEach(function (g) { polyTo(ctx, g.c, 0, 0); });
+        ctx.fillStyle = mix(col, C.far, 0.38); ctx.fill();
+        ctx.strokeStyle = mix(col, C.mixLine[0], C.mixLine[1] + 0.15); ctx.lineWidth = 0.8; ctx.stroke();
+      });
+    } else {
+      var lift = function (b) { return Math.max(1.2, Math.min(b.k === 'tower' ? 11 : 7, (LIFT[b.k] || 3) * s * 0.9)); };
+      var all = E.map(function (g, k) { return { g: g, b: empty[k], e: lift(empty[k]) }; }).concat(F.map(function (g, k) { return { g: g, b: full[k], e: lift(full[k]) }; }));
+      // 1. ombres portées (un seul remplissage), vers le bas-droite
+      ctx.beginPath();
+      all.forEach(function (it) { extrudeTo(ctx, it.g.c, it.e * 0.9, it.e * 0.75); });
+      ctx.fillStyle = C.shadow; ctx.fill();
+      // 2. façades puis toits (décalés vers le haut), regroupés par couleur
+      var layers = {};
+      all.forEach(function (it) {
+        var key = it.b.col || '';
+        (layers[key] || (layers[key] = [])).push(it);
+      });
+      var keys = Object.keys(layers).sort(function (a, b) { return a === '' ? -1 : b === '' ? 1 : 0; });
+      keys.forEach(function (key) {
+        var L0 = layers[key], wall = key ? mix(key, C.mixWall[0], C.mixWall[1]) : C.wall;
+        var roof = key ? mix(key, C.mixRoof[0], C.mixRoof[1]) : C.roof, line = key ? mix(key, C.mixLine[0], C.mixLine[1]) : C.line;
+        ctx.beginPath(); L0.forEach(function (it) { extrudeTo(ctx, it.g.c, 0, -it.e); }); ctx.fillStyle = wall; ctx.fill();
+        ctx.beginPath(); L0.forEach(function (it) { polyTo(ctx, it.g.c, 0, -it.e); }); ctx.fillStyle = roof; ctx.fill();
+        ctx.strokeStyle = line; ctx.lineWidth = key ? 1.6 : 0.8; ctx.stroke();
+      });
+      // 3. pastille de valeur au fort zoom (coin du toit le plus haut à droite, si elle ne gêne pas l'icône centrale)
+      if (z >= o.pillZ) {
+        ctx.font = '700 10px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        all.forEach(function (it) {
+          var b = it.b; if (!b.col || !b.tn) return;
+          var c = it.g.c, best = c[0];
+          for (var j = 1; j < 4; j++) if (c[j][0] - c[j][1] > best[0] - best[1]) best = c[j];
+          var px = best[0], py = best[1] - it.e;
+          if (Math.hypot(px - it.g.cx, py - it.g.cy + it.e) < 34) return;
+          var txt = new Array(b.tn + 1).join('$'), w = 8 + 6.5 * b.tn;
+          ctx.beginPath();
+          if (ctx.roundRect) ctx.roundRect(px - w / 2, py - 7, w, 14, 7); else ctx.rect(px - w / 2, py - 7, w, 14);
+          ctx.fillStyle = C.pill; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = b.tc || '#ffe14d'; ctx.stroke();
+          ctx.fillStyle = th.neon ? (b.tc || '#ffe14d') : C.pillTxt; ctx.fillText(txt, px, py + 0.5);
+        });
+      }
+    }
+    // bâtiment sélectionné (fiche ouverte) : liseré blanc + couleur
+    if (sel) {
+      var g = bldgCorners(sel, T, 2.4), e = detail ? Math.max(1.2, Math.min(sel.k === 'tower' ? 11 : 7, (LIFT[sel.k] || 3) * s * 0.9)) : 0;
+      ctx.beginPath(); polyTo(ctx, g.c, 0, -e);
+      ctx.lineWidth = 5; ctx.strokeStyle = sel.col || '#22e6ff'; ctx.stroke();
+      ctx.lineWidth = 2; ctx.strokeStyle = C.sel; ctx.stroke();
+    }
+    return n;
+  }
+  /* ---------- Repères visibles en jeu : petites icônes grises discrètes (canvas) ---------- */
+  var pathCache = {};
+  function iconPath(k, pathOf) {
+    if (pathCache[k] !== undefined) return pathCache[k];
+    var d = pathOf ? pathOf(k) : null, p = null;
+    try { p = d ? new Path2D(d) : null; } catch (e) { p = null; }
+    return (pathCache[k] = p);
+  }
+  // chaque point : x, y, ic (clé d'icône), show (bool)
+  function drawRefs(I, ctx, T, th, o) {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, T.w * T.r, T.h * T.r);
+    if (!I || !o.on || T.z < o.minZ - 0.01) return 0;
+    var s = T.s, x0 = T.ox - 30 / s, x1 = T.ox + (T.w + 30) / s, y1 = T.oy + 30 / s, y0 = T.oy - (T.h + 30) / s;
+    var R = T.z >= -1 ? 8.5 : 7, n = 0, sc = (R * 1.25) / 24;
+    var list = bldgIn(I, x0, y0, x1, y1).filter(function (p) { return p.show && p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1; });
+    ctx.setTransform(T.r, 0, 0, T.r, 0, 0);
+    // pastilles (un seul remplissage) puis icônes
+    ctx.beginPath();
+    list.forEach(function (p) { var X = (p.x - T.ox) * s, Y = (T.oy - p.y) * s; ctx.moveTo(X + R, Y); ctx.arc(X, Y, R, 0, Math.PI * 2); });
+    ctx.fillStyle = th.neon ? 'rgba(52,56,92,.88)' : 'rgba(116,126,142,.82)'; ctx.fill();
+    ctx.lineWidth = 1.2; ctx.strokeStyle = th.neon ? 'rgba(170,176,215,.55)' : 'rgba(255,255,255,.9)'; ctx.stroke();
+    ctx.strokeStyle = th.neon ? '#c9cde6' : '#ffffff'; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    list.forEach(function (p) {
+      var P = iconPath(p.ic, o.pathOf); if (!P) return;
+      var X = (p.x - T.ox) * s, Y = (T.oy - p.y) * s;
+      ctx.setTransform(T.r * sc, 0, 0, T.r * sc, T.r * (X - 12 * sc), T.r * (Y - 12 * sc));
+      ctx.lineWidth = 2.4; ctx.stroke(P); n++;
+    });
+    return n;
+  }
+  function inBldg(b, x, y, tol) {
+    var a = -(b.a || 0) * Math.PI / 180, dx = x - b.x, dy = y - b.y;
+    var u = dx * Math.cos(a) - dy * Math.sin(a), v = dx * Math.sin(a) + dy * Math.cos(a);
+    return Math.abs(u) <= b.w / 2 + tol && Math.abs(v) <= b.h / 2 + tol;
+  }
+
   /* ---------- API ---------- */
   function create(map, data, o) {
     o = o || {};
@@ -569,7 +749,48 @@
     }, { pane: o.labelPane || 'streetlbl', padding: 0.15 });
     bm.addTo = function () { bm.base.addTo(map); return bm; };
     bm.addLabels = function () { bm.labels.addTo(map); return bm; };
-    bm.setTheme = function (id) { bm.theme = THEMES[id] || THEMES.game; bm.base.redraw(); bm.labels.redraw(); };
+    bm.setTheme = function (id) { bm.theme = THEMES[id] || THEMES.game; bm.base.redraw(); bm.labels.redraw(); if (bm.bldg) bm.bldg.redraw(); if (bm.refs) bm.refs.redraw(); };
+    // bâtiments (calque canvas dédié, pane « bldg ») : bm.setBuildings(liste, options) puis bm.bldg.redraw() après un changement de style
+    bm.bldgOpt = { content: true, all: false, sel: null, minZ: -3, detailZ: -1.5, pillZ: 0.5 };
+    bm.setBuildings = function (list, opt) {
+      bm.bldgIndex = bldgIndex(list || []);
+      if (opt) Object.keys(opt).forEach(function (k) { bm.bldgOpt[k] = opt[k]; });
+      if (!bm.bldg) {
+        bm.bldg = new CanvasLayer(function (ctx, T) { bm.stats.buildings = drawBuildings(bm.bldgIndex, ctx, T, bm.theme, bm.bldgOpt); }, { pane: o.bldgPane || 'bldg', padding: 0.2 });
+        bm.bldg.addTo(map);
+      } else bm.bldg.redraw();
+      return bm;
+    };
+    // repères visibles en jeu (pane « refs ») : bm.setRefs(liste, { on, minZ, pathOf }) puis bm.refs.redraw()
+    bm.refOpt = { on: true, minZ: -2.5, pathOf: null };
+    bm.setRefs = function (list, opt) {
+      bm.refIndex = bldgIndex(list || []);
+      if (opt) Object.keys(opt).forEach(function (k) { bm.refOpt[k] = opt[k]; });
+      if (!bm.refs) {
+        bm.refs = new CanvasLayer(function (ctx, T) { bm.stats.refs = drawRefs(bm.refIndex, ctx, T, bm.theme, bm.refOpt); }, { pane: o.refPane || 'refs', padding: 0.15 });
+        bm.refs.addTo(map);
+      } else bm.refs.redraw();
+      return bm;
+    };
+    bm.refAt = function (x, y, tolPx) {
+      if (!bm.refIndex || !bm.refOpt.on || map.getZoom() < bm.refOpt.minZ) return null;
+      var tol = (tolPx || 10) / Math.pow(2, map.getZoom()), best = null, bd = tol;
+      bldgIn(bm.refIndex, x - tol, y - tol, x + tol, y + tol).forEach(function (p) {
+        if (!p.show) return;
+        var d = Math.hypot(p.x - x, p.y - y); if (d < bd) { bd = d; best = p; }
+      });
+      return best;
+    };
+    // bâtiment sous un point (coordonnées monde) ; tolérance en px écran ; filtre facultatif
+    bm.buildingAt = function (x, y, tolPx, test) {
+      if (!bm.bldgIndex) return null;
+      var tol = (tolPx || 0) / Math.pow(2, map.getZoom()), best = null, bd = Infinity;
+      bldgIn(bm.bldgIndex, x - 100 - tol, y - 100 - tol, x + 100 + tol, y + 100 + tol).forEach(function (b) {
+        if ((test && !test(b)) || !inBldg(b, x, y, tol)) return;
+        var d = Math.hypot(b.x - x, b.y - y); if (d < bd) { bd = d; best = b; }
+      });
+      return best;
+    };
     bm.setGrid = function (on) { bm.grid = on ? bm.G : null; bm.base.redraw(); };
     bm.hasRoads = function () { return B.nRoads > 0; };
     // nom de la rue la plus proche (ou null)

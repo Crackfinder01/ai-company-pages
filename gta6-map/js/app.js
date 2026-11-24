@@ -141,7 +141,7 @@
   var iconCache = {};
   var routes = [], zones = [];
   var F = { min: 0, diff: {}, notrack: false, unlocked: false };   // filtres
-  var opt = { amt: true, size: false, zones: true, zk: {}, grid: false, chap: true };         // options d'affichage
+  var opt = { amt: true, size: false, zones: true, zk: {}, grid: false, chap: true, bldg: true, bldgAll: false, refs: true };         // options d'affichage
   var has = { amt: false, diff: false, notrack: false, unlocked: false };
   var zoneLayer = null, zoneRenderer = null;
   var route = null;         // tournée en cours : { r, pts, idx, line, glow, nums }
@@ -151,6 +151,9 @@
   var blips = null;         // catégorie -> { ingame, note } (blips.json)
   var psMode = false;       // « Mode PlayStation »
   var anchors = [];
+  var blds = [];            // bâtiments (buildings.json) : { id, n, x, y, w, h, a, k, items:[marqueurs], main, vmin, vmax, … }
+  var bldMulti = [];        // bâtiments à plusieurs éléments : une seule icône « bâtiment » dans les clusters
+  var selB = null;          // bâtiment dont la fiche est ouverte
 
   /* ---------- Chargement des données ---------- */
   function fetchJSON(name) {
@@ -264,9 +267,14 @@
         cats[m.c] = { id: m.c, g: 'autres', n: String(m.c || 'Autres'), color: '#cccccc', icon: 'pin', hidden: false, presets: [], list: [], ndone: 0 };
         catOrder.push(m.c);
       }
-      var o = { id: String(m.id), c: m.c, x: m.x, y: m.y, n: m.n || 'Sans nom', d: m.d || '', g: typeof m.g === 'string' ? m.g.trim() : '', approx: !!m.approx, src: m.src || '', v: (m.v && typeof m.v === 'object') ? m.v : null, l: (m.l && typeof m.l === 'object') ? m.l : null, i: parseInfo(m.i), ch: Array.isArray(m.ch) && m.ch.length ? m.ch : null, mk: null, on: false };
+      var o = { id: String(m.id), c: m.c, x: m.x, y: m.y, ax: m.x, ay: m.y, n: m.n || 'Sans nom', d: m.d || '', g: typeof m.g === 'string' ? m.g.trim() : '', approx: !!m.approx, src: m.src || '', v: (m.v && typeof m.v === 'object') ? m.v : null, l: (m.l && typeof m.l === 'object') ? m.l : null, i: parseInfo(m.i), ch: Array.isArray(m.ch) && m.ch.length ? m.ch : null, mk: null, on: false };
       computeAmount(o);
       o.sec = security(o);
+      if (typeof m.q === 'string' && m.q.trim()) o.q = m.q.trim();
+      if (typeof m.g2 === 'string' && m.g2.trim()) o.g2 = m.g2.trim();
+      if (Array.isArray(m.r)) o.r0 = m.r;
+      if (m.b != null && m.b !== '') o.b0 = String(m.b);                      // id du bâtiment (intégrateur)
+      if (num(m.sx) !== null && num(m.sy) !== null) { o.sx = num(m.sx); o.sy = num(m.sy); }   // position « snap » dans le rectangle
       if (o.amt > 0) has.amt = true;
       if (o.i && o.i.diff) has.diff = true;
       if (o.sec.notrack !== null) has.notrack = true;
@@ -282,6 +290,23 @@
       gIdx[c.g].cats.push(c);
     });
     groups = gList.map(function (g) { return gIdx[g.id]; }).filter(function (g) { return g && g.cats.length; });
+    prepBuildings(data.buildings);
+    // repères visibles en jeu (« r ») : résolus vers les points de la carte
+    markers.forEach(function (m) {
+      if (!m.r0) return;
+      var out = [];
+      m.r0.forEach(function (r) {
+        var a = r && byId[String(r.id)];
+        if (!a || a === m || out.length >= 3) return;
+        var d = num(r.dist); if (d === null) d = Math.hypot(m.x - a.x, m.y - a.y);
+        var raw = typeof r.dir === 'string' && r.dir.trim() ? r.dir.trim() : '';
+        // { id, label, dir, dist } comme dans markers.json (lu aussi par js/mybg.js) + m (point repère), x, y, dirTxt (« au nord-est »)
+        out.push({ id: a.id, label: typeof r.label === 'string' && r.label.trim() ? r.label.trim() : 'icône ' + cats[a.c].n, dir: raw, dist: d,
+          m: a, x: a.ax, y: a.ay, dirTxt: raw ? dirFr(raw) : dirWord(m.x - a.x, m.y - a.y) });
+      });
+      m.r = m.r0; delete m.r0;
+      if (out.length) m.refs = out;
+    });
     // labels
     D.labels = (Array.isArray(data.labels) ? data.labels : []).filter(function (l) { return l && l.n && isFinite(l.x) && isFinite(l.y); });
     // tournées et zones (optionnelles)
@@ -324,7 +349,7 @@
     }
     var o = store.get('opts', null);
     if (o && typeof o === 'object') {
-      opt.amt = o.amt !== false; opt.size = !!o.size; opt.zones = o.zones !== false; opt.grid = !!o.grid; opt.chap = o.chap !== false; opt.bldg = o.bldg !== false;
+      opt.amt = o.amt !== false; opt.size = !!o.size; opt.zones = o.zones !== false; opt.grid = !!o.grid; opt.chap = o.chap !== false; opt.bldg = o.bldg !== false; opt.bldgAll = !!o.bldgAll; opt.refs = o.refs !== false;
       if (o.zk && typeof o.zk === 'object') opt.zk = o.zk;
     }
     if (!has.amt) F.min = 0;
@@ -393,27 +418,224 @@
     bm.addTo();
     if (opt.grid) bm.setGrid(true);
     try { drawBuildings(); } catch (e) { /* calque facultatif */ }
+    try { drawRefs(); } catch (e) { /* calque facultatif */ }
   }
-  // Bâtiments repères (gtadb CC BY 4.0 + marqueurs) : petits blocs visibles au zoom quartier
-  var BLDG_COL = { villa: '#d9c7a3', house: '#cfc6b8', tower: '#9fb0c8', store: '#c9b8d8', bank: '#e6c46a', warehouse: '#b7b2a6', hotel: '#d7a9b9', landmark: '#f0a96b', other: '#c3c9d4' };
-  function drawBuildings() {
-    var B = Array.isArray(D.buildings) ? D.buildings : [];
-    if (!B.length) return;
-    var rnd = L.canvas({ pane: 'bldg', padding: 0.2 });
-    var lay = L.layerGroup();
-    B.forEach(function (b) {
-      if (typeof b.x !== 'number' || typeof b.y !== 'number') return;
-      var h = Math.max(6, Math.min(60, (b.s || 18))) / 2;
-      var r = L.rectangle([[b.y - h, b.x - h], [b.y + h, b.x + h]], { renderer: rnd, stroke: true, weight: 1, color: 'rgba(30,40,60,.7)',
-        fillColor: BLDG_COL[b.k] || BLDG_COL.other, fillOpacity: 1, interactive: !!b.n, bubblingMouseEvents: false });
-      if (b.n) r.on('click', function () { toast(b.n); });
-      r.addTo(lay);
+  /* ---------- Bâtiments : chaque bâtiment représente quelque chose ; les icônes sont posées dessus ---------- */
+  var BKIND = { villa: 'Villa', house: 'Maison', tower: 'Tour', store: 'Magasin', bank: 'Banque', warehouse: 'Entrepôt', hotel: 'Hôtel', landmark: 'Lieu emblématique', other: 'Bâtiment' };
+  function clampN(v, a, b) { return Math.max(a, Math.min(b, v)); }
+  // lit buildings.json : nouveau format { id, n?, x, y, w, h, a, k, items, main, vmin?, vmax? } ou ancien { n?, x, y, k, s }
+  function prepBuildings(raw) {
+    var list = Array.isArray(raw) ? raw : (raw && Array.isArray(raw.buildings) ? raw.buildings : []);
+    var legacy = [];
+    list.forEach(function (b, k) {
+      if (!b || typeof b.x !== 'number' || typeof b.y !== 'number' || !isFinite(b.x) || !isFinite(b.y)) return;
+      var s = num(b.s), w = num(b.w), h = num(b.h);
+      if (!(w > 0)) w = s > 0 ? s : 18;
+      if (!(h > 0)) h = s > 0 ? s : w;
+      // (ancien format sans id : « _old… », jamais confondu avec le champ « b » des marqueurs)
+      var o = { id: b.id != null ? String(b.id) : '_old' + k, n: typeof b.n === 'string' ? b.n.trim() : '', x: b.x, y: b.y,
+        w: clampN(w, 3, 400), h: clampN(h, 3, 400), a: num(b.a) || 0, k: BKIND[b.k] ? b.k : 'other', items: [],
+        main: typeof b.main === 'string' ? b.main : null, vmin: num(b.vmin), vmax: num(b.vmax), col: null, tn: 0, tc: null, W: [], mk: null, on: false };
+      if (Array.isArray(b.items)) b.items.forEach(function (id) { var m = byId[String(id)]; if (m && !m.bld) { m.bld = o; o.items.push(m); } });
+      else legacy.push(o);
+      blds.push(o);
     });
-    function upd() { var on = opt.bldg !== false && map.getZoom() >= -3; if (on && !map.hasLayer(lay)) lay.addTo(map); else if (!on && map.hasLayer(lay)) map.removeLayer(lay); }
-    map.on('zoomend', upd); upd();
-    var c = $('optBldg'), row = $('bldgRow');
+    // champ « b » des marqueurs (id du bâtiment) : complète les « items »
+    var bIdx = {};
+    blds.forEach(function (b) { bIdx[b.id] = b; });
+    markers.forEach(function (m) { if (!m.bld && m.b0 && bIdx[m.b0]) { m.bld = bIdx[m.b0]; m.bld.items.push(m); } delete m.b0; });
+    // ancien format (sans « items ») : rattache chaque point posé sur l'emprise d'un bâtiment (le plus proche)
+    if (legacy.length) {
+      var g = {}, C = 100;
+      legacy.forEach(function (b) { var key = Math.floor(b.x / C) + ':' + Math.floor(b.y / C); (g[key] || (g[key] = [])).push(b); });
+      markers.forEach(function (m) {
+        if (m.bld) return;
+        var best = null, bd = Infinity, gx = Math.floor(m.x / C), gy = Math.floor(m.y / C);
+        for (var i = gx - 1; i <= gx + 1; i++) for (var j = gy - 1; j <= gy + 1; j++) (g[i + ':' + j] || []).forEach(function (b) {
+          var dx = Math.abs(m.x - b.x), dy = Math.abs(m.y - b.y);
+          if (dx <= b.w / 2 + 6 && dy <= b.h / 2 + 6 && dx + dy < bd) { bd = dx + dy; best = b; }
+        });
+        if (best) { m.bld = best; best.items.push(m); }
+      });
+    }
+    blds.forEach(function (b) {
+      b.items.sort(function (p, q) { return (q.amt || 0) - (p.amt || 0) || (p.n < q.n ? -1 : 1); });
+      // seul dans son bâtiment : à sa position « snap » (dans le rectangle) si connue, sinon au centre ;
+      // à plusieurs : regroupés en une icône « bâtiment » au centre
+      b.items.forEach(function (m) {
+        var snap = b.items.length === 1 && m.sx != null && inRect(b, m.sx, m.sy);
+        m.ax = snap ? m.sx : b.x; m.ay = snap ? m.sy : b.y;
+        if (b.items.length > 1) m.grp = b;
+      });
+      if (b.items.length > 1) bldMulti.push(b);
+      if (!b.main || !cats[b.main]) b.main = b.items.length ? b.items[0].c : null;
+    });
+  }
+  function inRect(b, x, y) {
+    var a = -b.a * Math.PI / 180, dx = x - b.x, dy = y - b.y;
+    return Math.abs(dx * Math.cos(a) - dy * Math.sin(a)) <= b.w / 2 + 1 && Math.abs(dx * Math.sin(a) + dy * Math.cos(a)) <= b.h / 2 + 1;
+  }
+  function bldName(b) { return b.n || (BKIND[b.k] || 'Bâtiment'); }
+  // catégorie principale parmi les éléments affichés (W)
+  function mainOf(b, W) {
+    if (!W.length) return b.main;
+    for (var i = 0; i < W.length; i++) if (W[i].c === b.main) return b.main;
+    return W[0].c;   // éléments triés par montant décroissant
+  }
+  function bldValue(b, W) {
+    var lo = 0, hi = 0;
+    (W || b.items).forEach(function (m) { lo += m.amtLo || 0; hi += m.amtHi || 0; });
+    if (!W && (b.vmin > 0 || b.vmax > 0)) { lo = b.vmin > 0 ? b.vmin : b.vmax; hi = b.vmax > 0 ? b.vmax : b.vmin; }
+    return [lo, hi];
+  }
+  // style du dessin : teinte de la catégorie principale si au moins un élément est affiché, sinon neutre
+  function styleBuildings() {
+    if (!blds.length) return;
+    blds.forEach(function (b) {
+      var W = b.items.filter(wanted);
+      b.W = W;
+      b.col = W.length ? cats[mainOf(b, W)].color : null;
+      b.ref = !W.length && opt.refs !== false && hasBlips() && b.items.some(function (m) { return inGame(m.c); });
+      var v = bldValue(b), a = (v[0] + v[1]) / 2, t = a > 0 ? tierOf(a) : -1;
+      b.tn = t < 0 ? 0 : t < 2 ? 1 : t < 3 ? 2 : 3; b.tc = t < 0 ? null : TIERS[t].c;
+    });
+    if (bm && bm.bldg) { bm.bldgOpt.sel = selB || (selected && selected.bld) || null; bm.bldg.redraw(); }
+  }
+  function hiliteBuilding() { styleRefs(); if (bm && bm.bldg) { bm.bldgOpt.sel = selB || (selected && selected.bld) || null; bm.bldg.redraw(); } }
+
+  // icône « bâtiment » : catégorie principale + badge du nombre d'éléments affichés
+  function bIcon(b) {
+    var W = b.W, mc = mainOf(b, W), c = cats[mc];
+    var v = bldValue(b, W), amt = (v[0] + v[1]) / 2, tier = amt > 0 ? tierOf(amt) : -1;
+    var lbl = amt > 0 ? (v[0] !== v[1] ? '~' : '') + fmtK(amt) : '';
+    var dn = W.length && W.every(function (m) { return done[m.id]; });
+    var cls = 'mk inb bmk' + (dn ? ' dn' : '') + (selB === b ? ' sel' : '') + (tier >= 0 ? ' t' + tier : '') + (blips && !inGame(mc) ? ' ng' : '');
+    var key = 'B|' + mc + '|' + cls + '|' + lbl + '|' + W.length;
+    var ic = iconCache[key];
+    if (!ic) {
+      ic = iconCache[key] = L.divIcon({
+        className: cls, iconSize: [44, 44], iconAnchor: [22, 22],
+        html: '<div style="--c:' + esc(c.color) + '">' + ICONS.use(c.icon) + (W.length > 1 ? '<i class="bn">' + W.length + '</i>' : '') + '</div>' + (lbl ? '<b class="amt">' + esc(lbl) + '</b>' : '')
+      });
+    }
+    return ic;
+  }
+  function makeBMarker(b) {
+    var mk = L.marker([b.y, b.x], { icon: bIcon(b), keyboard: false, riseOnHover: false, title: bldName(b) });
+    mk.on('click', function (e) {
+      if (e.originalEvent) L.DomEvent.stop(e.originalEvent);
+      if (placingMe) { setMe(mk.getLatLng()); setPlacing(false); return; }
+      if (b.W.length === 1) openSheet(b.W[0], false); else openBuilding(b, false);
+    });
+    mk._gta = { c: mainOf(b, b.W) };
+    b.mk = mk;
+  }
+  function refreshB(b) { if (b && b.mk) { b.mk.setIcon(bIcon(b)); b.mk._gta.c = mainOf(b, b.W); } }
+
+  // dessin (canvas, js/basemap.js) + interrupteurs « Bâtiments avec contenu » / « Tous les bâtiments »
+  function drawBuildings() {
+    if (!blds.length || !bm || !bm.setBuildings) return;
+    styleBuildings();
+    bm.setBuildings(blds, { content: opt.bldg !== false, all: !!opt.bldgAll, minZ: -3, detailZ: -1.5, pillZ: 0.5 });
+    var c = $('optBldg'), ca = $('optBldgAll');
+    if ($('bldgRow')) $('bldgRow').hidden = false;
+    if ($('bldgAllRow')) $('bldgAllRow').hidden = false;
+    var sync = function () {
+      c.checked = opt.bldg !== false; ca.checked = !!opt.bldgAll;
+      bm.bldgOpt.content = opt.bldg !== false; bm.bldgOpt.all = !!opt.bldgAll; bm.bldg.redraw();
+    };
+    if (c && ca) {
+      sync();
+      c.addEventListener('change', function () {
+        opt.bldg = c.checked; if (!c.checked) opt.bldgAll = false;
+        saveOpts(); sync(); toast(c.checked ? 'Bâtiments avec contenu affichés (zoome sur une ville)' : 'Bâtiments masqués');
+      });
+      ca.addEventListener('change', function () {
+        opt.bldgAll = ca.checked; if (ca.checked) opt.bldg = true;
+        saveOpts(); sync(); toast(ca.checked ? 'Tous les bâtiments affichés, même vides' : 'Seulement les bâtiments avec contenu');
+      });
+    }
+  }
+  // « Repères visibles en jeu » : points des catégories qui ont une icône sur la carte du jeu, toujours affichés en gris discret
+  var refPts = [];
+  function drawRefs() {
+    if (!hasBlips() || !bm || !bm.setRefs) return;
+    refPts = markers.filter(function (m) { return inGame(m.c); }).map(function (m) { return { x: m.ax, y: m.ay, ic: cats[m.c].icon, show: false, m: m }; });
+    styleRefs(true);
+    bm.setRefs(refPts, { on: opt.refs !== false, minZ: -2.5, pathOf: function (k) { var e = document.querySelector('#i-' + k + ' path'); return e ? e.getAttribute('d') : null; } });
+    var row = $('refsRow'), c = $('optRefs');
     if (row) row.hidden = false;
-    if (c) { c.checked = opt.bldg !== false; c.addEventListener('change', function () { opt.bldg = c.checked; saveOpts(); upd(); toast(c.checked ? 'Bâtiments affichés (zoome sur un quartier)' : 'Bâtiments masqués'); }); }
+    if (c) {
+      c.checked = opt.refs !== false;
+      c.addEventListener('change', function () {
+        opt.refs = c.checked; saveOpts(); bm.refOpt.on = opt.refs; bm.refs.redraw(); styleBuildings();
+        toast(c.checked ? 'Repères du jeu affichés en gris (zoome sur un quartier)' : 'Repères du jeu masqués');
+      });
+    }
+  }
+  function styleRefs(quiet) {
+    for (var i = 0; i < refPts.length; i++) { var m = refPts[i].m; refPts[i].show = !m.pinned && !wanted(m); }
+    if (!quiet && bm && bm.refs) bm.refs.redraw();
+  }
+  // tap sur la carte : icône grise « repère du jeu », puis bâtiment (avec contenu, ou nommé si « Tous ») ; true si traité
+  function tapTarget(ll) {
+    var r = bm && bm.refAt ? bm.refAt(ll.lng, ll.lat, 11) : null;
+    if (r) { openSheet(r.m, false); return true; }
+    if (!bldgShown() || map.getZoom() < -1.5) return false;   // en vue « ville », les bâtiments ne sont qu'un repère visuel
+    var bh = bm.buildingAt(ll.lng, ll.lat, 4, function (b) { return b.col || (opt.bldgAll && b.n); });
+    if (!bh) return false;
+    if (bh.W.length > 1) openBuilding(bh, false);
+    else if (bh.W.length === 1) openSheet(bh.W[0], false);
+    else if (bh.n) toast(bh.n);
+    else return false;
+    return true;
+  }
+  function bldgShown() { return bm && bm.bldg && (opt.bldg !== false || opt.bldgAll) && map.getZoom() >= -3; }
+
+  // fiche « Ce bâtiment contient : … »
+  function openBuilding(b, fly) {
+    if (selected) { var p = selected; selected = null; unsolo(p); clearLine(); }
+    var prev = selB; selB = b;
+    if (prev && prev !== b) refreshB(prev);
+    refreshB(b);
+    hiliteBuilding();
+    renderBuilding();
+    document.body.classList.add('sheet-open');
+    $('sheet').setAttribute('aria-hidden', 'false');
+    $('sheet').scrollTop = 0;
+    var sh = isWide() ? 0 : $('sheet').offsetHeight;
+    document.body.style.setProperty('--sheeth', sh + 'px');
+    updateRoutePill();
+    closeLegend();
+    if (fly === 'none') return;
+    if (fly) map.setView([b.y, b.x], Math.max(map.getZoom(), 0), { animate: false });
+    panToSheet(b.x, b.y, sh);
+  }
+  function renderBuilding() {
+    var b = selB; if (!b) return;
+    var W = b.items.filter(wanted), mc = mainOf(b, W.length ? W : b.items), c = cats[mc] || { color: '#9fb4ff', icon: 'city', n: '' };
+    var v = bldValue(b), nd = b.items.filter(function (m) { return done[m.id]; }).length;
+    var kind = BKIND[b.k] || 'Bâtiment';
+    var h = '<div class="shd bshd" style="--c:' + esc(c.color) + '"><span class="bigdot bsq">' + ICONS.use(c.icon) + '<i class="bn">' + b.items.length + '</i></span><div class="sht"><h2>' + esc(bldName(b)) + '</h2>' +
+      '<div class="shm"><span class="pill"><i></i>' + esc(b.n ? kind : 'Bâtiment') + '</span><span class="zn">' + ICONS.use('ui_me') + esc(zoneOf(b)) + '</span></div></div>' +
+      (v[1] > 0 ? '<div class="mbs"><div class="mb" style="--t:' + TIERS[tierOf((v[0] + v[1]) / 2)].c + '"><small>Valeur totale du contenu</small><strong>' + esc(moneyRange(v[0], v[1])) + '</strong></div></div>' : '') + '</div>';
+    h += '<h3 class="bh">Ce bâtiment contient :<small>' + b.items.length + ' élément' + (b.items.length > 1 ? 's' : '') + (nd ? ' · ' + nd + ' fait' + (nd > 1 ? 's' : '') : '') + '</small></h3><div class="blist" id="bList"></div>';
+    h += '<button type="button" class="btn wherebtn" id="actWhereB">' + ICONS.use('gamepad') + '<span>Où est-ce sur la carte du jeu ?<small>' + esc(whereHint(b)) + '</small></span>' + ICONS.use('ui_chev') + '</button>';
+    $('sheetBody').innerHTML = h;
+    var box = $('bList');
+    b.items.forEach(function (m) {
+      var r = resultRow(m);
+      r.classList.add('bitem');
+      if (!wanted(m)) r.classList.add('masked');
+      box.appendChild(r);
+    });
+    $('actWhereB').addEventListener('click', function () { openWhere({ x: b.x, y: b.y, ax: b.x, ay: b.y, c: mc, n: bldName(b) }); });
+    if (document.body.classList.contains('sheet-open') && !isWide()) document.body.style.setProperty('--sheeth', $('sheet').offsetHeight + 'px');
+  }
+  // ligne « Dans : … » dans la fiche d'un point rangé dans un bâtiment à plusieurs éléments
+  function bldStrip(m) {
+    var b = m.bld; if (!b || b.items.length < 2) return '';
+    return '<button type="button" class="btn bstrip" id="actBld">' + ICONS.use('city') + '<span>Dans : <b>' + esc(bldName(b)) + '</b><small>Ce bâtiment contient ' + b.items.length + ' éléments — voir la liste</small></span>' + ICONS.use('ui_chev') + '</button>';
   }
 
   /* ---------- Carte ---------- */
@@ -444,6 +666,7 @@
     map.createPane('mybg').style.zIndex = 350;     // « Mon fond de carte » (captures de l'utilisateur)
     map.createPane('mybgline').style.zIndex = 360; // contours de contrôle pendant le calage
     map.createPane('zones').style.zIndex = 380;    // halos des zones rentables
+    map.createPane('refs').style.zIndex = 390;     // repères visibles en jeu (petites icônes grises)
     map.createPane('route').style.zIndex = 420;    // tracé de la tournée
     map.createPane('streetlbl').style.zIndex = 440; // noms de rues (canvas)
     map.createPane('labels').style.zIndex = 450;
@@ -499,7 +722,8 @@
       if (mybgBusy()) return;
       if (placingMe) { setMe(e.latlng); setPlacing(false); return; }
       closeResults(); closeLegend();
-      if (selected) closeSheet();
+      if (selected || selB) closeSheet();
+      else if (tapTarget(e.latlng)) return;
       else if (document.body.classList.contains('panel-open') && !isWide()) closePanel();
     });
     map.on('contextmenu', function (e) { if (mybgBusy()) return; setMe(e.latlng); setPlacing(false); });
@@ -675,6 +899,18 @@
 
   /* ---------- « Où est-ce sur la carte du jeu ? » ---------- */
   var DIRS = ['à l\'est', 'au nord-est', 'au nord', 'au nord-ouest', 'à l\'ouest', 'au sud-ouest', 'au sud', 'au sud-est'];
+  // « nord-est » -> « au nord-est », « est » -> « à l'est » (texte déjà formé : inchangé)
+  function dirFr(d) {
+    var n = norm(d).trim();
+    if (/^(au|a|à) /.test(n) || /^(a|à) l'/.test(n)) return d;
+    return /^(est|ouest)/.test(n) ? 'à l\'' + d : 'au ' + d;
+  }
+  // repères pour retrouver un point : d'abord les icônes réelles du jeu (« r »), sinon anchors.json / libellés
+  function whereRefs(m, n) {
+    if (m.refs && m.refs.length) return m.refs.slice(0, n).map(function (r) { return { a: { n: r.label, x: r.x, y: r.y, k: 'blip', d: '', c: r.m.c }, d: r.dist, dirTxt: r.dirTxt }; });
+    return nearestAnchors(m, n);
+  }
+  function relTxt(o, m) { return o.dirTxt || dirWord(m.x - o.a.x, m.y - o.a.y); }
   function dirWord(dx, dy) { var a = Math.atan2(dy, dx); var k = Math.round(a / (Math.PI / 4)); return DIRS[(k + 8) % 8]; }
   var anchorCache = null;
   function anchorList() {
@@ -697,7 +933,7 @@
   }
   function openWhere(m) {
     var box = $('where'); box.hidden = false;
-    var near = nearestAnchors(m, 3);
+    var near = whereRefs(m, 3);
     var pts = [[m.x, m.y]].concat(near.map(function (o) { return [o.a.x, o.a.y]; }));
     var x0 = Math.min.apply(null, pts.map(function (p) { return p[0]; })), x1 = Math.max.apply(null, pts.map(function (p) { return p[0]; }));
     var y0 = Math.min.apply(null, pts.map(function (p) { return p[1]; })), y1 = Math.max.apply(null, pts.map(function (p) { return p[1]; }));
@@ -736,19 +972,19 @@
     if (near.length) {
       var f = near[0];
       h2 += '<li><span class="wn">1</span><p>Sur la carte du jeu, repère <b>' + esc(f.a.n) + '</b>.' + (f.a.d ? '<small class="wd">' + esc(f.a.d) + '</small>' : '') + '</p></li>';
-      h2 += '<li><span class="wn pt">' + ICONS.use('ui_target') + '</span><p>' + (f.d < 90 ? 'Le point est <b>juste à côté</b>.' : 'Le point est à <b>' + esc(fmtKm(f.d)) + ' ' + dirWord(m.x - f.a.x, m.y - f.a.y) + '</b> de ce repère.') + '</p></li>';
-      if (near.length > 1) h2 += '<li><span class="wn">' + (near.length > 2 ? '2·3' : '2') + '</span><p>Pour vérifier : ' + near.slice(1).map(function (o) { return esc(fmtKm(o.d)) + ' ' + dirWord(m.x - o.a.x, m.y - o.a.y) + ' de <b>' + esc(o.a.n) + '</b>'; }).join(', ') + '.</p></li>';
+      h2 += '<li><span class="wn pt">' + ICONS.use('ui_target') + '</span><p>' + (f.d < 90 ? 'Le point est <b>juste à côté</b>.' : 'Le point est à <b>' + esc(fmtKm(f.d)) + ' ' + relTxt(f, m) + '</b> de ce repère.') + '</p></li>';
+      if (near.length > 1) h2 += '<li><span class="wn">' + (near.length > 2 ? '2·3' : '2') + '</span><p>Pour vérifier : ' + near.slice(1).map(function (o) { return esc(fmtKm(o.d)) + ' ' + relTxt(o, m) + ' de <b>' + esc(o.a.n) + '</b>'; }).join(', ') + '.</p></li>';
     }
     var extra = [];
     if (street) extra.push('près de <b>' + esc(street) + '</b>');
-    extra.push('quartier : <b>' + esc(zoneOf(m)) + '</b>');
+    extra.push('quartier : <b>' + esc(m.q || zoneOf(m)) + '</b>');
     if (cell) extra.push('case <b>' + cell + '</b> de la grille');
     h2 += '<li><span class="wn">' + ICONS.use('ui_grid') + '</span><p>' + extra.join(' · ') + '.</p></li>';
     if (blips && blips[m.c]) h2 += '<li><span class="wn">' + ICONS.use(inGame(m.c) ? 'eye' : 'ui_eyeoff') + '</span><p>' + (inGame(m.c) ? 'Ce type de lieu a une <b>icône sur la carte du jeu</b>.' : 'Ce point n\'a <b>pas d\'icône</b> sur la carte du jeu : vise l\'endroit avec les repères.') + '</p></li>';
     $('whereSteps').innerHTML = h2;
     $('whereT').textContent = 'Où est-ce sur la carte du jeu ?';
     $('whereSub').textContent = m.n;
-    $('whereGo').onclick = function () { closeWhere(); map.setView([m.y, m.x], Math.max(map.getZoom(), -1)); flash(m); };
+    $('whereGo').onclick = function () { closeWhere(); map.setView([m.ay != null ? m.ay : m.y, m.ax != null ? m.ax : m.x], Math.max(map.getZoom(), -1)); flash(m); };
   }
   function closeWhere() { $('where').hidden = true; }
 
@@ -766,7 +1002,7 @@
         fx: { radial: [[0, 'rgba(' + K.rgb + ',' + (0.10 + 0.30 * s).toFixed(3) + ')'], [0.6, 'rgba(' + K.rgb + ',' + (0.06 + 0.22 * s).toFixed(3) + ')'], [0.85, 'rgba(' + K.rgb + ',' + (0.08 + 0.3 * s).toFixed(3) + ')'], [1, 'rgba(' + K.rgb + ',0)']] }
       });
       c._zone = z;
-      c.on('click', function (e) { L.DomEvent.stopPropagation(e); if (placingMe) { setMe(e.latlng); setPlacing(false); return; } zonePopup(z); });
+      c.on('click', function (e) { L.DomEvent.stopPropagation(e); if (placingMe) { setMe(e.latlng); setPlacing(false); return; } if (!selected && !selB && tapTarget(e.latlng)) return; zonePopup(z); });
       z.layer = c;
     });
     map.on('zoomend', styleZones);
@@ -808,7 +1044,7 @@
   /* ---------- Marqueurs ---------- */
   function iconFor(m) {
     var c = cats[m.c];
-    var cls = 'mk' + (m.approx ? ' ap' : '') + (done[m.id] ? ' dn' : '') + (fav[m.id] ? ' fv' : '') + (selected === m ? ' sel' : '') + (m.tier >= 0 ? ' t' + m.tier : '') + (m.rt ? ' rt' : '') + (blips && !inGame(m.c) ? ' ng' : '');
+    var cls = 'mk' + (m.approx ? ' ap' : '') + (done[m.id] ? ' dn' : '') + (fav[m.id] ? ' fv' : '') + (selected === m ? ' sel' : '') + (m.tier >= 0 ? ' t' + m.tier : '') + (m.rt ? ' rt' : '') + (blips && !inGame(m.c) ? ' ng' : '') + (m.bld ? ' inb' : '');
     var key = m.c + '|' + cls + '|' + m.amtLbl;
     var ic = iconCache[key];
     if (!ic) {
@@ -820,12 +1056,12 @@
     return ic;
   }
   function makeMarker(m) {
-    var mk = L.marker([m.y, m.x], { icon: iconFor(m), keyboard: false, riseOnHover: false });
+    var mk = L.marker([m.ay, m.ax], { icon: iconFor(m), keyboard: false, riseOnHover: false });
     mk.on('click', function (e) { if (e.originalEvent) L.DomEvent.stop(e.originalEvent); if (placingMe) { setMe(mk.getLatLng()); setPlacing(false); return; } openSheet(m, false); });
     mk._gta = m;
     m.mk = mk;
   }
-  function refreshIcon(m) { if (m.mk) m.mk.setIcon(iconFor(m)); }
+  function refreshIcon(m) { if (m.mk) m.mk.setIcon(iconFor(m)); if (m.grp) refreshB(m.grp); }
 
   function clusterIcon(cl) {
     var n = cl.getChildCount();
@@ -861,9 +1097,19 @@
     for (var i = 0; i < markers.length; i++) {
       var m = markers[i];
       if (m.pinned) continue; // point sélectionné ou de la tournée : affiché hors clusters
+      if (m.grp) { if (m.on) { rem.push(m.mk); m.on = false; } continue; }   // affiché par l'icône de son bâtiment
       var w = wanted(m);
       if (w && !m.on) { if (!m.mk) makeMarker(m); add.push(m.mk); m.on = true; }
       else if (!w && m.on) { rem.push(m.mk); m.on = false; }
+    }
+    styleBuildings();
+    styleRefs();
+    for (var j = 0; j < bldMulti.length; j++) {
+      var b = bldMulti[j];
+      if (b.W.length) {
+        if (!b.mk) makeBMarker(b); else refreshB(b);
+        if (!b.on) { add.push(b.mk); b.on = true; }
+      } else if (b.on) { rem.push(b.mk); b.on = false; }
     }
     if (rem.length) cluster.removeLayers(rem);
     if (add.length) cluster.addLayers(add);
@@ -952,7 +1198,7 @@
       catOrder.forEach(function (id) { cats[id].ndone = 0; });
       store.set('done', []);
       ids.forEach(function (id) { if (byId[id]) refreshIcon(byId[id]); });
-      applyVisibility(); if (selected) renderSheet();
+      applyVisibility(); if (selected) renderSheet(); else if (selB) renderBuilding();
       if (route) drawRouteNums();
       toast('Progression remise à zéro');
     });
@@ -1148,7 +1394,7 @@
       var on = ids.length && ids.every(function (id) { return visible[id]; });
       b.classList.toggle('on', !!on); b.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
-    if (filtersActive()) { shown = 0; for (var i = 0; i < markers.length; i++) if (markers[i].on || markers[i].pinned && wanted(markers[i])) shown++; }
+    if (filtersActive()) { shown = 0; for (var i = 0; i < markers.length; i++) if (markers[i].on || (markers[i].pinned || markers[i].grp) && wanted(markers[i])) shown++; }
     $('visibleCount').textContent = shown ? fmtInt(shown) + ' point' + (shown > 1 ? 's' : '') + ' affiché' + (shown > 1 ? 's' : '') + ' sur ' + fmtInt(markers.length) + (filtersActive() ? ' (filtres actifs)' : '') : 'Aucun point affiché : choisissez un préréglage, une catégorie ou élargissez les filtres.';
     updateFilterUI();
     renderFavs();
@@ -1333,7 +1579,7 @@
   function unpinIfFree(m) {
     if (!m.pinned || m.solo || m.rt) return;
     map.removeLayer(m.mk); m.pinned = false;
-    if (wanted(m)) { cluster.addLayer(m.mk); m.on = true; }
+    if (wanted(m) && !m.grp) { cluster.addLayer(m.mk); m.on = true; }
   }
   function unsolo(m) {
     if (!m || !m.solo) return;
@@ -1344,12 +1590,15 @@
   // fly : true = recentre et zoome au moins à minZ ; 'none' = ne bouge pas la carte
   function openSheet(m, fly, minZ) {
     var prev = selected;
+    if (selB) { var ob = selB; selB = null; refreshB(ob); }
+    if (prev !== m) clearRef();
     selected = m;
     if (prev && prev !== m) unsolo(prev);
     m.solo = true; pin(m); m.mk.setZIndexOffset(1000);
     if (route) { var k = route.pts.indexOf(m); if (k >= 0 && k !== route.idx) { route.idx = k; drawRouteNums(); } }
     refreshIcon(m);
     clearLine();
+    hiliteBuilding();
     renderSheet();
     document.body.classList.add('sheet-open');
     $('sheet').setAttribute('aria-hidden', 'false');
@@ -1359,16 +1608,17 @@
     updateRoutePill();
     closeLegend();
     if (fly === 'none') return;
-    var go = function () {
-      var size = map.getSize();
-      var pt = map.latLngToContainerPoint([m.y, m.x]);
-      var tx = isWide() ? (size.x - 430) / 2 + (document.body.classList.contains('panel-open') ? 190 : 0) : size.x / 2;
-      var ty = isWide() ? size.y / 2 : Math.max(90, (size.y - sh) / 2);
-      map.panBy([pt.x - tx, pt.y - ty], { animate: true });
-      flash(m);
-    };
-    if (fly) map.setView([m.y, m.x], Math.max(map.getZoom(), minZ == null ? 0 : minZ), { animate: false });
-    go();
+    if (fly) map.setView([m.ay, m.ax], Math.max(map.getZoom(), minZ == null ? 0 : minZ), { animate: false });
+    panToSheet(m.ax, m.ay, sh);
+    flash(m);
+  }
+  // centre un point dans la partie de carte visible à côté de la fiche
+  function panToSheet(x, y, sh) {
+    var size = map.getSize();
+    var pt = map.latLngToContainerPoint([y, x]);
+    var tx = isWide() ? (size.x - 430) / 2 + (document.body.classList.contains('panel-open') ? 190 : 0) : size.x / 2;
+    var ty = isWide() ? size.y / 2 : Math.max(90, (size.y - sh) / 2);
+    map.panBy([pt.x - tx, pt.y - ty], { animate: true });
   }
   function flash(m) {
     var el = m.mk && m.mk.getElement && m.mk.getElement();
@@ -1378,6 +1628,9 @@
   }
   function closeSheet() {
     var m = selected; selected = null;
+    clearRef();
+    if (selB) { var ob = selB; selB = null; refreshB(ob); }
+    hiliteBuilding();
     document.body.classList.remove('sheet-open');
     $('sheet').setAttribute('aria-hidden', 'true');
     clearLine();
@@ -1491,9 +1744,9 @@
     var me = store.get('me', null);
     var h = routeStrip(m) +
       '<div class="shd" style="--c:' + esc(c.color) + '"><span class="bigdot">' + ICONS.use(c.icon) + '</span><div class="sht"><h2>' + esc(m.n) + '</h2>' +
-      '<div class="shm"><span class="pill"><i></i>' + esc(c.n) + '</span><span class="zn">' + ICONS.use('ui_me') + esc(zoneOf(m)) + '</span>' + gameBadge(m) + (m.ch ? '<span class="chapbadge">Planque du chapitre ' + m.ch.join(' et ') + '</span>' : '') + '</div></div>' +
+      '<div class="shm"><span class="pill"><i></i>' + esc(c.n) + '</span><span class="zn">' + ICONS.use('ui_me') + esc(m.q || zoneOf(m)) + '</span>' + gameBadge(m) + (m.ch ? '<span class="chapbadge">Planque du chapitre ' + m.ch.join(' et ') + '</span>' : '') + '</div></div>' +
       moneyBadges(m) + secLine(m) + '</div>' +
-      (m.g ? '<div class="howto"><span class="hti">' + ICONS.use('ui_compass') + '</span><div><b>Comment le trouver dans le jeu</b><p>' + esc(m.g) + '</p></div></div>' : '') +
+      howtoBlock(m) + photoBtn() + bldStrip(m) +
       infoBlock(m) + moneyNote(m);
     if (m.approx) h += '<div class="approx">◌ Position approximative</div>';
     h += m.d ? '<p class="desc">' + esc(m.d) + '</p>' : '<p class="desc empty">Pas encore de description pour ce point.</p>';
@@ -1510,6 +1763,15 @@
     $('actFav').addEventListener('click', function () { toggleFav(m); });
     $('actCopy').addEventListener('click', function () { copyCoords(m); });
     $('actWhere').addEventListener('click', function () { openWhere(m); });
+    var ab = $('actBld'); if (ab) ab.addEventListener('click', function () { openBuilding(m.bld, 'none'); });
+    var ap = $('actPhoto');
+    if (ap) ap.addEventListener('click', function () {
+      if (!hasPhoto()) { ap.parentNode.hidden = true; return; }
+      try { window.GTA6_MYBG.locateOnPhoto(m); } catch (e) { toast('Impossible d\'ouvrir la photo pour l\'instant'); }
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('#sheetBody .refrow'), function (b) {
+      b.addEventListener('click', function () { showRef(m, m.refs[+b.getAttribute('data-k')]); });
+    });
     var al = $('actLine'); if (al) al.addEventListener('click', function () { toggleLine(m); });
     if ($('rtQuit')) {
       $('rtQuit').addEventListener('click', function () { stopRoute(); });
@@ -1520,14 +1782,50 @@
     if (document.body.classList.contains('sheet-open') && !isWide()) document.body.style.setProperty('--sheeth', $('sheet').offsetHeight + 'px');
   }
 
+  // « Comment le trouver dans le jeu » : g2 (pas à pas carte PS5) sinon g, + repères visibles en jeu tapables
+  function howtoBlock(m) {
+    var txt = m.g2 || m.g;
+    if (!txt && !m.refs) return '';
+    var h = '<div class="howto"><span class="hti">' + ICONS.use('ui_compass') + '</span><div><b>Comment le trouver dans le jeu</b>' + (txt ? '<p>' + esc(txt) + '</p>' : '') + '</div></div>';
+    if (m.refs) {
+      h += '<div class="refs">' + m.refs.map(function (r, k) {
+        var c = cats[r.m.c];
+        return '<button type="button" class="btn refrow" data-k="' + k + '" style="--c:' + esc(c.color) + '"><span class="dot">' + ICONS.use(c.icon) + '</span><span class="rt"><b>' + esc(r.label) + '</b><small>' +
+          esc(r.dist < 15 ? 'juste à côté du repère' : fmtKm(r.dist) + ' ' + r.dirTxt + ' du repère') + '</small></span>' + ICONS.use('ui_target') + '</button>';
+      }).join('') + '</div>';
+    }
+    return h;
+  }
+  // « Trouver ce point sur ma photo de la PS5 » (fonction fournie par js/mybg.js ; absente = bouton masqué)
+  function hasPhoto() { return !!(window.GTA6_MYBG && typeof window.GTA6_MYBG.locateOnPhoto === 'function'); }
+  function photoBtn() {
+    if (!hasPhoto()) return '';
+    return '<div class="photobox"><button type="button" class="btn photobtn" id="actPhoto">' + ICONS.use('camera') + '<span>Trouver ce point sur ma photo de la PS5</span>' + ICONS.use('ui_chev') + '</button>' +
+      '<p class="photohelp">Sur ta PS5, centre la carte sur la zone, prends une photo, l\'app te montre le point exact dessus.</p></div>';
+  }
+  // centre la carte sur le repère et trace un trait pointillé repère -> point
+  var refLayer = null;
+  function clearRef() { if (refLayer) { map.removeLayer(refLayer); refLayer = null; } }
+  function showRef(m, r) {
+    clearRef();
+    refLayer = L.layerGroup([
+      L.polyline([[r.y, r.x], [m.ay, m.ax]], { pane: 'route', color: theme === 'game' ? '#1d2433' : '#ffffff', weight: 5, opacity: 0.35, interactive: false, lineCap: 'round' }),
+      L.polyline([[r.y, r.x], [m.ay, m.ax]], { pane: 'route', color: '#ff2e97', weight: 2.5, opacity: 0.95, dashArray: '7 7', interactive: false, lineCap: 'round' }),
+      L.circleMarker([r.y, r.x], { pane: 'route', radius: 17, color: '#ff2e97', weight: 2.5, fill: false, interactive: false })
+    ]).addTo(map);
+    // partie de carte visible au-dessus de la fiche (mobile) ou à gauche (grand écran)
+    var H = map.getSize().y, top = isWide() ? H : Math.max(200, $('sheet').getBoundingClientRect().top - map.getContainer().getBoundingClientRect().top);
+    map.fitBounds(L.latLngBounds([[r.y, r.x], [m.ay, m.ax]]), { paddingTopLeft: [50, 90], paddingBottomRight: [isWide() ? 480 : 50, isWide() ? 60 : H - top + 36], maxZoom: 0.5, animate: false });
+    pulseAt(r.x, r.y);
+  }
   function gameBadge(m) {
     if (!blips || !blips[m.c] || typeof blips[m.c].ingame !== 'boolean') return '';
     var on = blips[m.c].ingame, note = typeof blips[m.c].note === 'string' ? blips[m.c].note : '';
     return '<span class="gbadge ' + (on ? 'on' : 'off') + '"' + (note ? ' title="' + esc(note) + '"' : '') + '>' + ICONS.use(on ? 'eye' : 'ui_eyeoff') + (on ? 'Visible sur la carte du jeu' : 'Caché en jeu') + '</span>';
   }
   function whereHint(m) {
-    var n = nearestAnchors(m, 1)[0], cell = bm ? bm.G.cellOf(m.x, m.y) : '';
-    var t = n ? (n.d < 90 ? 'Juste à côté de ' + n.a.n : fmtKm(n.d) + ' ' + dirWord(m.x - n.a.x, m.y - n.a.y) + ' de ' + n.a.n) : '';
+    var n = whereRefs(m, 1)[0], cell = bm ? bm.G.cellOf(m.x, m.y) : '';
+    var t = n ? (n.d < 90 ? 'Juste à côté de ' + n.a.n : fmtKm(n.d) + ' ' + relTxt(n, m) + ' de ' + n.a.n) : '';
     return t + (cell ? (t ? ' · ' : '') + 'case ' + cell : '');
   }
   function toggleDone(m, quiet) {
@@ -1586,14 +1884,14 @@
     var shownCats = false;
     pts.forEach(function (m) { if (!visible[m.c]) { visible[m.c] = true; shownCats = true; } });
     if (shownCats) applyVisibility();
-    var ll = pts.map(function (m) { return [m.y, m.x]; });
+    var ll = pts.map(function (m) { return [m.ay, m.ax]; });
     var K = kindOf(r.kind);
     route = { r: r, pts: pts, idx: 0, nums: [] };
     pts.forEach(function (m) { m.rt = true; pin(m); if (!m.solo) m.mk.setZIndexOffset(500); refreshIcon(m); });
     route.glow = L.polyline(ll, { pane: 'route', color: K.c, weight: 10, opacity: 0.22, interactive: false, lineCap: 'round', lineJoin: 'round' }).addTo(map);
     route.line = L.polyline(ll, { pane: 'route', color: '#ffffff', weight: 2.5, opacity: 0.9, dashArray: '10 8', interactive: false, lineCap: 'round', lineJoin: 'round' }).addTo(map);
     pts.forEach(function (m, k) {
-      var mk = L.marker([m.y, m.x], { pane: 'routenum', keyboard: false, zIndexOffset: 0, icon: numIcon(k, '') });
+      var mk = L.marker([m.ay, m.ax], { pane: 'routenum', keyboard: false, zIndexOffset: 0, icon: numIcon(k, '') });
       mk.on('click', function (e) { if (e.originalEvent) L.DomEvent.stop(e.originalEvent); goStep(k); });
       mk.addTo(map); route.nums.push(mk);
     });
@@ -1769,7 +2067,7 @@
       else if (placingMe) setPlacing(false);
       else if (!$('results').hidden) closeResults();
       else if (!$('legendBox').hidden) closeLegend();
-      else if (selected) closeSheet();
+      else if (selected || selB) closeSheet();
       else if (document.body.classList.contains('panel-open')) closePanel();
     });
     // glisser la fiche vers le bas pour la fermer
@@ -1839,7 +2137,7 @@
       if (window.GTA6_MYBG) {
         try {
           window.GTA6_MYBG.init({ map: map, land: D.land, labels: D.labels, markers: markers, cats: cats, store: store, toast: toast, esc: esc, norm: norm,
-            fmtDist: fmtDist, isWide: isWide, openPanel: openPanel, closePanel: closePanel, closeSheet: function () { if (selected) closeSheet(); } });
+            fmtDist: fmtDist, isWide: isWide, openPanel: openPanel, closePanel: closePanel, closeSheet: function () { if (selected || selB) closeSheet(); } });
         } catch (e) { /* la carte reste utilisable sans « Mon fond de carte » */ }
       }
       if (isWide()) openPanel();
@@ -1849,7 +2147,7 @@
       window.GTA6_APP = { map: map, markers: markers, cats: cats, visible: visible, cluster: cluster, openSheet: openSheet, closeSheet: closeSheet, focusMarker: focusMarker, applyVisibility: applyVisibility,
         routes: routes, zones: zones, startRoute: startRoute, stopRoute: stopRoute, goStep: goStep, setTab: setTab, openPanel: openPanel, closePanel: closePanel,
         filters: F, opts: opt, route: function () { return route; }, labels: function () { return labelItems.filter(function (it) { return it.on; }).map(function (it) { return it.t; }); },
-        basemap: function () { return bm; }, setTheme: setTheme, setGrid: setGrid, setPS: setPS, ps: function () { return psMode; }, openWhere: openWhere, inGame: inGame };
+        basemap: function () { return bm; }, buildings: blds, openBuilding: openBuilding, selB: function () { return selB; }, setTheme: setTheme, setGrid: setGrid, setPS: setPS, ps: function () { return psMode; }, openWhere: openWhere, inGame: inGame };
       updateScale(); updateGridEdges();
     }, function () {
       showError('Données de la carte introuvables ou illisibles. Vérifiez votre connexion (ou le dossier « data »), puis réessayez.');

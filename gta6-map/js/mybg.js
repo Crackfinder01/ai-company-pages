@@ -65,6 +65,7 @@
         if (f) { REP.push({ key: 'r' + i, n: f.n, x: f.x, y: f.y, h: r.h, z: r.z }); return; }
       }
     });
+    resolveZoneReps(byName);
   }
   function searchPlaces(q) {
     var nq = X.norm(q).trim(); if (nq.length < 2) return [];
@@ -358,6 +359,7 @@
   function renderList() {
     var box = $('mybgList'); box.innerHTML = '';
     items.forEach(function (it) {
+      if (it.tmp) return; // photo en cours de « Où est-ce sur ma photo ? »
       var el = document.createElement('div');
       el.className = 'mybg'; el.setAttribute('data-id', it.id);
       var h = '<div class="mybg-h"><img class="thumb" alt="" src="' + X.esc(it.url) + '"><div class="mybg-t"><b>' + X.esc(it.name) + '</b><small>' +
@@ -391,6 +393,7 @@
       });
     });
     $('mybgImport').lastChild.textContent = items.length ? 'Importer une autre capture' : 'Importer ma capture de la carte du jeu';
+    wizSync();
   }
   function debounceLocal(fn, ms) { var t; return function () { clearTimeout(t); t = setTimeout(fn, ms); }; }
 
@@ -1256,7 +1259,343 @@
       return { ok: true, rect: rect, w: w, h: h, conf: conf, score: final, margin: top.sc - second, kind: kind, info: info, ms: Date.now() - t0,
         tf: { a: T.a, b: T.b, c: T.X - T.a * uc - T.b * vc, d: T.d, e: T.e, f: T.Y - T.d * uc - T.e * vc } };
     }
-    return { run: run, detectScreen: detectScreen, screenGeom: screenGeom, warp: warp, prep: prep, textLines: textLines };
+
+    /* -- Calage « par voisinage » : la nouvelle capture est recalée sur une capture déjà calée qui la chevauche.
+       Images comparées : module du gradient (indépendant des couleurs), pyramides. Recherche grossière multi-échelle par
+       corrélation de phase (FFT, les deux images dans une seule FFT complexe), vérification par corrélation normalisée (NCC),
+       puis raffinement Nelder-Mead (position + échelle, nord en haut) de plus en plus fin. -- */
+    function nbGrad(px, w, h, band) {
+      var N = w * h, Lm = new Float32Array(N), G = new Float32Array(N), i, j;
+      for (i = 0; i < N; i++) Lm[i] = 0.299 * px[4 * i] + 0.587 * px[4 * i + 1] + 0.114 * px[4 * i + 2];
+      Lm = boxBlur(Lm, w, h, 1, 1);
+      for (j = 1; j < h - 1; j++) for (i = 1; i < w - 1; i++) {
+        var o = j * w + i;
+        var gx = (Lm[o - w + 1] + 2 * Lm[o + 1] + Lm[o + w + 1]) - (Lm[o - w - 1] + 2 * Lm[o - 1] + Lm[o + w - 1]);
+        var gy = (Lm[o + w - 1] + 2 * Lm[o + w] + Lm[o + w + 1]) - (Lm[o - w - 1] + 2 * Lm[o - w] + Lm[o - w + 1]);
+        G[o] = Math.sqrt(Math.sqrt(gx * gx + gy * gy)); // racine du contraste : les textes très contrastés ne dominent pas
+      }
+      var b = band || [0, 1], I = { w: w, h: h, u0: 2, u1: w - 2, v0: Math.max(2, Math.round(b[0] * h)), v1: Math.min(h - 2, Math.round(b[1] * h)) };
+      I.uc = (I.u0 + I.u1) / 2; I.vc = (I.v0 + I.v1) / 2; I.ww = I.u1 - I.u0; I.hh = I.v1 - I.v0;
+      var P = [{ g: G, w: w, h: h }], c = P[0];
+      while (Math.max(c.w, c.h) > 24 && Math.min(c.w, c.h) > 8) {
+        var w2 = c.w >> 1, h2 = c.h >> 1, g2 = new Float32Array(w2 * h2);
+        for (j = 0; j < h2; j++) for (i = 0; i < w2; i++) { var q = 2 * j * c.w + 2 * i; g2[j * w2 + i] = 0.25 * (c.g[q] + c.g[q + 1] + c.g[q + c.w] + c.g[q + c.w + 1]); }
+        c = { g: g2, w: w2, h: h2 }; P.push(c);
+      }
+      I.P = P;
+      return I;
+    }
+    function nbLev(I, rho, s) { return Math.max(0, Math.min(I.P.length - 1, Math.floor(Math.log(rho / s) / Math.LN2 + 0.15))); }
+    // valeur du gradient au point (u, v) (pixels de l'image d'origine) dans le niveau l de la pyramide
+    function nbAt(I, l, u, v) {
+      var Lv = I.P[l], k = 1 << l, U = (u + 0.5) / k - 0.5, V = (v + 0.5) / k - 0.5;
+      var x0 = Math.floor(U), y0 = Math.floor(V);
+      if (x0 < 0) x0 = 0; else if (x0 > Lv.w - 2) x0 = Lv.w - 2;
+      if (y0 < 0) y0 = 0; else if (y0 > Lv.h - 2) y0 = Lv.h - 2;
+      var fx = Math.max(0, Math.min(1, U - x0)), fy = Math.max(0, Math.min(1, V - y0)), g = Lv.g, o = y0 * Lv.w + x0;
+      return (g[o] * (1 - fx) + g[o + 1] * fx) * (1 - fy) + (g[o + Lv.w] * (1 - fx) + g[o + Lv.w + 1] * fx) * fy;
+    }
+    function nbIn(I, u, v) { return u >= I.u0 && u <= I.u1 && v >= I.v0 && v <= I.v1; }
+    function nbTaper(I, u, v) {
+      var m = 0.07 * Math.min(I.ww, I.hh);
+      return Math.min(1, (u - I.u0) / m, (I.u1 - u) / m) * Math.min(1, (v - I.v0) / m, (I.v1 - v) / m);
+    }
+    function nbPrepB(B) { // capture déjà calée : transformation inverse, emprise monde
+      var t = B.tf, det = t.a * t.e - t.b * t.d;
+      B.inv = { a: t.e / det, b: -t.b / det, d: -t.d / det, e: t.a / det };
+      B.s = Math.sqrt(Math.abs(det));
+      var xs = [], ys = [];
+      [[B.u0, B.v0], [B.u1, B.v0], [B.u0, B.v1], [B.u1, B.v1]].forEach(function (p) { xs.push(t.a * p[0] + t.b * p[1] + t.c); ys.push(t.d * p[0] + t.e * p[1] + t.f); });
+      B.bx = [Math.min.apply(null, xs), Math.max.apply(null, xs), Math.min.apply(null, ys), Math.max.apply(null, ys)];
+      B.cx = (B.bx[0] + B.bx[1]) / 2; B.cy = (B.bx[2] + B.bx[3]) / 2; B.E = Math.max(B.bx[1] - B.bx[0], B.bx[3] - B.bx[2]);
+      return B;
+    }
+    function nbToB(B, x, y) { var i = B.inv, X2 = x - B.tf.c, Y2 = y - B.tf.f; return [i.a * X2 + i.b * Y2, i.d * X2 + i.e * Y2]; }
+    // recherche grossière à l'échelle s (unités monde par pixel de A) : corrélation de phase sur une toile NC x NC
+    function nbCoarseAt(A, B, s, NC, out) {
+      var Ea = s * Math.max(A.ww, A.hh), E = Math.max(Ea, B.E) + 0.6 * Math.min(Ea, B.E), r = E / NC, N2 = NC * NC, i, j, k;
+      var la = nbLev(A, r, s), lb = nbLev(B, r, B.s);
+      var va = new Float32Array(N2), vb = new Float32Array(N2), ma = new Uint8Array(N2), mb = new Uint8Array(N2), ta = new Float32Array(N2), tb = new Float32Array(N2);
+      var sa = 0, na = 0, sb = 0, nb = 0;
+      for (j = 0; j < NC; j++) for (i = 0; i < NC; i++) {
+        k = j * NC + i;
+        var du = (i + 0.5 - NC / 2) * r, dv = (j + 0.5 - NC / 2) * r;
+        var u = A.uc + du / s, v = A.vc + dv / s;
+        if (nbIn(A, u, v)) { va[k] = nbAt(A, la, u, v); ma[k] = 1; ta[k] = nbTaper(A, u, v); sa += va[k]; na++; }
+        var q = nbToB(B, B.cx + du, B.cy - dv);
+        if (nbIn(B, q[0], q[1])) { vb[k] = nbAt(B, lb, q[0], q[1]); mb[k] = 1; tb[k] = nbTaper(B, q[0], q[1]); sb += vb[k]; nb++; }
+      }
+      if (na < 50 || nb < 50) return;
+      sa /= na; sb /= nb;
+      var re = new Float64Array(N2), im = new Float64Array(N2);
+      for (k = 0; k < N2; k++) { if (mb[k]) re[k] = (vb[k] - sb) * tb[k]; if (ma[k]) im[k] = (va[k] - sa) * ta[k]; }
+      fft2(re, im, NC, NC, false);
+      var cr = new Float64Array(N2), ci = new Float64Array(N2), mx = 0;
+      for (j = 0; j < NC; j++) for (i = 0; i < NC; i++) {
+        k = j * NC + i; var kn = ((NC - j) % NC) * NC + ((NC - i) % NC);
+        var Zr = re[k], Zi = im[k], Wr = re[kn], Wi = im[kn];
+        var Nr = (Zr + Wr) / 2, Ni = (Zi - Wi) / 2, Ar = (Zi + Wi) / 2, Ai = -(Zr - Wr) / 2;
+        var Rr = Nr * Ar + Ni * Ai, Ri = Ni * Ar - Nr * Ai, m = Math.sqrt(Rr * Rr + Ri * Ri);
+        cr[k] = Rr; ci[k] = Ri; if (m > mx) mx = m;
+      }
+      var eps = 1e-3 * mx + 1e-12;
+      for (k = 0; k < N2; k++) { var m2 = Math.sqrt(cr[k] * cr[k] + ci[k] * ci[k]) + eps; cr[k] /= m2; ci[k] /= m2; }
+      fft2(cr, ci, NC, NC, true);
+      // pics (maxima locaux, les 3 plus hauts)
+      var pk = [];
+      for (j = 0; j < NC; j++) for (i = 0; i < NC; i++) {
+        k = j * NC + i; var c0 = cr[k], isMax = true;
+        if (pk.length >= 3 && c0 <= pk[pk.length - 1].c) continue;
+        for (var dy = -2; dy <= 2 && isMax; dy++) for (var dx = -2; dx <= 2; dx++) {
+          if (!dx && !dy) continue;
+          if (cr[((j + dy + NC) % NC) * NC + ((i + dx + NC) % NC)] > c0) { isMax = false; break; }
+        }
+        if (!isMax) continue;
+        pk.push({ c: c0, i: i, j: j }); pk.sort(function (p, q2) { return q2.c - p.c; }); if (pk.length > 3) pk.pop();
+      }
+      var sum = 0; for (k = 0; k < N2; k++) sum += Math.abs(cr[k]);
+      var lvl = sum / N2;
+      pk.forEach(function (p) {
+        var dx2 = p.i > NC / 2 ? p.i - NC : p.i, dy2 = p.j > NC / 2 ? p.j - NC : p.j;
+        // NCC directe (valeurs brutes) sur le recouvrement
+        var n = 0, s1 = 0, s2 = 0, s11 = 0, s22 = 0, s12 = 0;
+        for (var y = 0; y < NC; y++) {
+          var yb = y + dy2; if (yb < 0 || yb >= NC) continue;
+          for (var x = 0; x < NC; x++) {
+            var xb = x + dx2; if (xb < 0 || xb >= NC) continue;
+            var ka = y * NC + x, kb = yb * NC + xb;
+            if (!ma[ka] || !mb[kb]) continue;
+            var a1 = va[ka], b1 = vb[kb];
+            n++; s1 += a1; s2 += b1; s11 += a1 * a1; s22 += b1 * b1; s12 += a1 * b1;
+          }
+        }
+        if (n < 0.2 * Math.min(na, nb) || n < 40) return;
+        var cov = s12 - s1 * s2 / n, d1 = s11 - s1 * s1 / n, d2 = s22 - s2 * s2 / n;
+        var ncc = d1 > 0 && d2 > 0 ? cov / Math.sqrt(d1 * d2) : 0;
+        out.push({ s: s, X: B.cx + dx2 * r, Y: B.cy - dy2 * r, r: r, ncc: ncc, pc: p.c / (lvl || 1), ov: n / Math.min(na, nb) });
+      });
+    }
+    // échantillons de A pour la résolution rho (unités monde) ; NCC entre A et B pour la transformation T = { X, Y, s }
+    function nbSamples(A, rho, s, maxN) {
+      var la = nbLev(A, rho, s), st = Math.max(1, rho / s), n = (A.ww / st) * (A.hh / st);
+      if (n > maxN) st *= Math.sqrt(n / maxN);
+      var U = [], V = [], G = [];
+      for (var v = A.v0 + st / 2; v < A.v1; v += st) for (var u = A.u0 + st / 2; u < A.u1; u += st) { U.push(u - A.uc); V.push(v - A.vc); G.push(nbAt(A, la, u, v)); }
+      return { u: Float64Array.from(U), v: Float64Array.from(V), g: Float64Array.from(G), n: U.length, rho: rho };
+    }
+    function nbNcc(S, B, T) {
+      var lb = nbLev(B, S.rho, B.s), n = 0, s1 = 0, s2 = 0, s11 = 0, s22 = 0, s12 = 0, t = B.tf, iv = B.inv;
+      for (var k = 0; k < S.n; k++) {
+        var x = T.X + T.s * S.u[k] - t.c, y = T.Y - T.s * S.v[k] - t.f;
+        var u = iv.a * x + iv.b * y, v = iv.d * x + iv.e * y;
+        if (!nbIn(B, u, v)) continue;
+        var a1 = S.g[k], b1 = nbAt(B, lb, u, v);
+        n++; s1 += a1; s2 += b1; s11 += a1 * a1; s22 += b1 * b1; s12 += a1 * b1;
+      }
+      if (n < 30) return { ncc: -1, cov: 0 };
+      var cov = s12 - s1 * s2 / n, d1 = s11 - s1 * s1 / n, d2 = s22 - s2 * s2 / n;
+      return { ncc: d1 > 0 && d2 > 0 ? cov / Math.sqrt(d1 * d2) : 0, cov: n / S.n };
+    }
+    function nbRefine(A, B, c0) {
+      var T = { X: c0.X, Y: c0.Y, s: c0.s }, rho = c0.r, fin = Math.max(T.s, B.s) * 1.2, last = null;
+      for (var pass = 0; pass < 6; pass++) {
+        var S = nbSamples(A, rho, T.s, 5000), T0 = T, U = 1.5 * rho;
+        var f = function (p) {
+          var Tt = { X: T0.X + p[0] * U, Y: T0.Y + p[1] * U, s: T0.s * Math.exp(p[2] * 0.03) };
+          var q = nbNcc(S, B, Tt);
+          return q.cov < 0.12 ? 1 : -q.ncc;
+        };
+        var res = nelder(f, [0, 0, 0], [0.6, 0.6, 0.6], 70);
+        T = { X: T0.X + res.x[0] * U, Y: T0.Y + res.x[1] * U, s: T0.s * Math.exp(res.x[2] * 0.03) };
+        last = rho;
+        if (rho <= fin) break;
+        rho = Math.max(fin, rho / 2);
+      }
+      // score final comparable d'une capture à l'autre : à 2 fois la résolution la plus grossière des deux images
+      var Sf = nbSamples(A, Math.max(T.s, B.s) * 2, T.s, 6000), q = nbNcc(Sf, B, T);
+      return { X: T.X, Y: T.Y, s: T.s, ncc: q.ncc, cov: q.cov, coarse: c0.ncc, rho: last };
+    }
+    /* job : { a: { px, w, h, band }, nbs: [{ id, px, w, h, band, tf (pixels de nb -> monde) }], sMin, sMax (unités monde par pixel de a) } */
+    function nbMatch(job, progress) {
+      var t0 = Date.now(), A = nbGrad(job.a.px, job.a.w, job.a.h, job.a.band), NC = job.nc || 256, all = [];
+      var Bs = job.nbs.map(function (n) { var B = nbGrad(n.px, n.w, n.h, n.band); B.tf = n.tf; B.id = n.id; return nbPrepB(B); });
+      var total = 0, done = 0, step = Math.log(1.06);
+      var plans = Bs.map(function (B) {
+        var lo = Math.log(Math.max(job.sMin || 0, B.E / 4 / Math.max(A.ww, A.hh))), hi = Math.log(Math.min(job.sMax || 1e9, B.E * 4 / Math.max(A.ww, A.hh)));
+        var L2 = []; for (var x = lo; x <= hi + 1e-9; x += step) L2.push(Math.exp(x));
+        total += L2.length; return L2;
+      });
+      Bs.forEach(function (B, bi) {
+        var out = [];
+        plans[bi].forEach(function (s) { nbCoarseAt(A, B, s, NC, out); done++; if (progress && done % 4 === 0) progress(0.7 * done / Math.max(1, total)); });
+        out.sort(function (p, q) { return q.ncc - p.ncc; });
+        // candidats distincts (position / échelle)
+        var pick = [];
+        out.forEach(function (c) {
+          if (pick.length >= 4) return;
+          var far = pick.every(function (p) { return Math.abs(Math.log(c.s / p.s)) > 0.12 || Math.hypot(c.X - p.X, c.Y - p.Y) > 0.1 * c.s * Math.max(A.ww, A.hh); });
+          if (far) pick.push(c);
+        });
+        pick.forEach(function (c) { var R = nbRefine(A, B, c); R.id = B.id; R.bi = bi; all.push(R); });
+      });
+      if (progress) progress(0.98);
+      all.sort(function (p, q) { return q.ncc - p.ncc; });
+      var best = all[0];
+      if (!best) return { ok: false, ms: Date.now() - t0, cands: [] };
+      var second = -1;
+      all.forEach(function (c) {
+        if (c === best) return;
+        var far = Math.abs(Math.log(c.s / best.s)) > 0.1 || Math.hypot(c.X - best.X, c.Y - best.Y) > 0.08 * best.s * Math.max(A.ww, A.hh);
+        if (far) second = Math.max(second, c.ncc);
+      });
+      var T = best;
+      return { ok: true, ms: Date.now() - t0, id: best.id, ncc: best.ncc, margin: best.ncc - second, cov: best.cov, s: best.s, aw: A.w, ah: A.h,
+        tf: { a: T.s, b: 0, c: T.X - T.s * A.uc, d: 0, e: -T.s, f: T.Y + T.s * A.vc },
+        cands: all.map(function (c) { return { id: c.id, ncc: +c.ncc.toFixed(3), coarse: +c.coarse.toFixed(3), x: Math.round(c.X), y: Math.round(c.Y), s: +c.s.toFixed(3), cov: +c.cov.toFixed(2) }; }) };
+    }
+
+
+    /* -- Icônes du jeu sur une capture / photo (pastilles claires ou colorées de taille fixe à l'écran) et appariement
+       de leur constellation avec les marqueurs « visibles en jeu » autour du point (vote de Hough sur l'échelle et la
+       position, nord en haut, puis moindres carrés). -- */
+    function icSat(M, w, h) { // tableau cumulé (somme) d'un masque 0/1
+      var S = new Int32Array((w + 1) * (h + 1));
+      for (var j = 0; j < h; j++) { var row = 0; for (var i = 0; i < w; i++) { row += M[j * w + i]; S[(j + 1) * (w + 1) + i + 1] = S[j * (w + 1) + i + 1] + row; } }
+      return S;
+    }
+    function icMorph(M, w, h, r, erode) {
+      var S = icSat(M, w, h), out = new Uint8Array(w * h), W1 = w + 1;
+      for (var j = 0; j < h; j++) {
+        var y0 = Math.max(0, j - r), y1 = Math.min(h, j + r + 1);
+        for (var i = 0; i < w; i++) {
+          var x0 = Math.max(0, i - r), x1 = Math.min(w, i + r + 1);
+          var s = S[y1 * W1 + x1] - S[y0 * W1 + x1] - S[y1 * W1 + x0] + S[y0 * W1 + x0];
+          out[j * w + i] = erode ? (s === (x1 - x0) * (y1 - y0) ? 1 : 0) : (s > 0 ? 1 : 0);
+        }
+      }
+      return out;
+    }
+    // pastilles : (1) pictogramme sombre entouré de blanc (icônes blanches) ; (2) pastille colorée non bleue (icônes vertes, roses…)
+    function icDetect(px, w, h, S, band) {
+      var N = w * h, Lm = new Float32Array(N), Dk = new Uint8Array(N), Cl = new Uint8Array(N), Br = new Uint8Array(N), i, j, k;
+      var v0 = Math.round((band ? band[0] : 0) * h), v1 = Math.round((band ? band[1] : 1) * h);
+      for (k = 0; k < N; k++) {
+        var r = px[4 * k], g = px[4 * k + 1], b = px[4 * k + 2], mx = Math.max(r, g, b), mn = Math.min(r, g, b), sat = mx ? (mx - mn) / mx : 0;
+        var L0 = 0.299 * r + 0.587 * g + 0.114 * b, blue = b >= r && b >= g; Lm[k] = L0;
+        j = (k / w) | 0; if (j < v0 || j >= v1) continue;
+        if (L0 < 105 && !(blue && sat > 0.3)) Dk[k] = 1;
+        if (L0 > 185 && sat < 0.3) Br[k] = 1;
+        if (sat > 0.42 && mx > 110 && !blue) Cl[k] = 1;
+      }
+      var out = [], lab = new Int32Array(N), st = [];
+      var comps = function (M, fn) {
+        lab.fill(0);
+        for (var p = 0; p < N; p++) {
+          if (!M[p] || lab[p]) continue;
+          lab[p] = 1; st.length = 0; st.push(p);
+          var area = 0, sx = 0, sy = 0, x0 = w, x1 = 0, y0 = h, y1 = 0;
+          while (st.length) {
+            var q = st.pop(), qx = q % w, qy = (q / w) | 0;
+            area++; sx += qx; sy += qy; if (qx < x0) x0 = qx; if (qx > x1) x1 = qx; if (qy < y0) y0 = qy; if (qy > y1) y1 = qy;
+            if (qx > 0 && M[q - 1] && !lab[q - 1]) { lab[q - 1] = 1; st.push(q - 1); }
+            if (qx < w - 1 && M[q + 1] && !lab[q + 1]) { lab[q + 1] = 1; st.push(q + 1); }
+            if (qy > 0 && M[q - w] && !lab[q - w]) { lab[q - w] = 1; st.push(q - w); }
+            if (qy < h - 1 && M[q + w] && !lab[q + w]) { lab[q + w] = 1; st.push(q + w); }
+          }
+          fn({ area: area, cx: sx / area + 0.5, cy: sy / area + 0.5, x0: x0, x1: x1, y0: y0, y1: y1, bw: x1 - x0 + 1, bh: y1 - y0 + 1 });
+        }
+      };
+      // (1) pictogramme sombre : petit, et entouré d'un anneau surtout clair
+      comps(Dk, function (c) {
+        if (c.bw > 0.85 * S || c.bh > 0.85 * S || Math.max(c.bw, c.bh) < 0.18 * S || c.area < 4) return;
+        var m = Math.max(2, Math.round(0.22 * S)), X0 = Math.max(0, c.x0 - m), X1 = Math.min(w - 1, c.x1 + m), Y0 = Math.max(0, c.y0 - m), Y1 = Math.min(h - 1, c.y1 + m);
+        var n = 0, nb = 0, nd = 0;
+        for (var y = Y0; y <= Y1; y++) for (var x = X0; x <= X1; x++) {
+          if (x >= c.x0 && x <= c.x1 && y >= c.y0 && y <= c.y1) continue;
+          n++; if (Br[y * w + x]) nb++; if (Dk[y * w + x]) nd++;
+        }
+        if (n && nb / n > 0.55 && nd / n < 0.12) out.push({ u: (c.x0 + c.x1 + 1) / 2, v: (c.y0 + c.y1 + 1) / 2, a: c.area, t: 1 });
+      });
+      // (2) pastille colorée (fermeture pour remplir le pictogramme clair)
+      var rc = Math.max(1, Math.round(S * 0.25));
+      Cl = icMorph(icMorph(Cl, w, h, rc, false), w, h, rc, true);
+      comps(Cl, function (c) {
+        if (c.area < 0.25 * S * S || c.area > 2.4 * S * S || c.bw < 0.5 * S || c.bh < 0.5 * S || c.bw > 1.7 * S || c.bh > 1.9 * S) return;
+        if (Math.max(c.bw, c.bh) / Math.min(c.bw, c.bh) > 1.8 || c.area / (c.bw * c.bh) < 0.45) return;
+        if (!out.some(function (o) { return Math.abs(o.u - c.cx) < 0.6 * S && Math.abs(o.v - c.cy) < 0.6 * S; })) out.push({ u: c.cx, v: c.cy, a: c.area, t: 2 });
+      });
+      return out;
+    }
+    // job : { px, w, h, band, S (taille d'une icône en px), K: [x, y, …] (icônes du jeu, monde), sMin, sMax, near: { x, y } }
+    function icMatch(job) {
+      var t0 = Date.now(), D = icDetect(job.px, job.w, job.h, job.S, job.band), K = job.K, nk = K.length >> 1, w = job.w, h = job.h;
+      var res = { ok: false, dets: D.map(function (d) { return [Math.round(d.u * 10) / 10, Math.round(d.v * 10) / 10]; }), nk: nk, ms: 0 };
+      if (D.length < 3 || nk < 3) { res.ms = Date.now() - t0; return res; }
+      var near = job.near, cands = [];
+      for (var ls = Math.log(job.sMin); ls <= Math.log(job.sMax) + 1e-9; ls += Math.log(1.035)) {
+        var s = Math.exp(ls), bin = Math.max(12, 0.7 * job.S * s), acc = {}, best = 0, bk = null;
+        for (var a = 0; a < D.length; a++) {
+          var du = s * D[a].u, dv = s * D[a].v;
+          for (var b = 0; b < nk; b++) {
+            var ox = K[2 * b] - du, oy = K[2 * b + 1] + dv;
+            // le point cherché doit tomber dans l'image
+            var pu = (near.x - ox) / s, pv = (oy - near.y) / s;
+            if (pu < 0 || pu > w || pv < 0 || pv > h) continue;
+            var kx = Math.floor(ox / bin), ky = Math.floor(oy / bin);
+            for (var ddx = 0; ddx <= 1; ddx++) for (var ddy = 0; ddy <= 1; ddy++) {
+              var key = (kx - ddx) + ',' + (ky - ddy), v = (acc[key] || 0) + 1; acc[key] = v;
+              if (v > best) { best = v; bk = [(kx - ddx + 1) * bin, (ky - ddy + 1) * bin]; }
+            }
+          }
+        }
+        if (best >= 3) cands.push({ s: s, ox: bk[0], oy: bk[1], votes: best });
+      }
+      cands.sort(function (p, q) { return q.votes - p.votes; });
+      var fits = [];
+      cands.slice(0, 12).forEach(function (c) {
+        var T = { s: c.s, ox: c.ox, oy: c.oy }, inl = [];
+        for (var it = 0; it < 4; it++) {
+          var tol = Math.max(15, 0.6 * job.S * T.s);
+          inl = []; var used = {};
+          D.forEach(function (d, di) {
+            var x = T.ox + T.s * d.u, y = T.oy - T.s * d.v, bd = tol, bj = -1;
+            for (var b2 = 0; b2 < nk; b2++) { var e = Math.hypot(K[2 * b2] - x, K[2 * b2 + 1] - y); if (e < bd) { bd = e; bj = b2; } }
+            if (bj >= 0 && !used[bj]) { used[bj] = 1; inl.push({ di: di, k: bj, e: bd }); }
+          });
+          if (inl.length < 3) break;
+          // moindres carrés : x = s u + ox ; y = -s v + oy
+          var mu = 0, mv = 0, mx = 0, my = 0, n = inl.length;
+          inl.forEach(function (q) { mu += D[q.di].u; mv += D[q.di].v; mx += K[2 * q.k]; my += K[2 * q.k + 1]; });
+          mu /= n; mv /= n; mx /= n; my /= n;
+          var num = 0, den = 0;
+          inl.forEach(function (q) { var du2 = D[q.di].u - mu, dv2 = D[q.di].v - mv; num += du2 * (K[2 * q.k] - mx) - dv2 * (K[2 * q.k + 1] - my); den += du2 * du2 + dv2 * dv2; });
+          if (!(den > 0) || !(num > 0)) break;
+          var s2 = num / den; if (s2 < job.sMin * 0.8 || s2 > job.sMax * 1.25) break;
+          T = { s: s2, ox: mx - s2 * mu, oy: my + s2 * mv };
+        }
+        if (inl.length < 3) return;
+        var rs = 0; inl.forEach(function (q) { var x = T.ox + T.s * D[q.di].u, y = T.oy - T.s * D[q.di].v; rs += Math.pow(Math.hypot(K[2 * q.k] - x, K[2 * q.k + 1] - y), 2); });
+        // nombre d'appariements dus au hasard : densité des icônes dans l'emprise de l'image x surface de tolérance x détections
+        var X0 = T.ox, X1 = T.ox + T.s * w, Y0 = T.oy - T.s * h, Y1 = T.oy, kin = 0;
+        for (var b3 = 0; b3 < nk; b3++) if (K[2 * b3] >= X0 && K[2 * b3] <= X1 && K[2 * b3 + 1] >= Y0 && K[2 * b3 + 1] <= Y1) kin++;
+        var tol2 = Math.max(15, 0.6 * job.S * T.s), lam = D.length * kin * Math.PI * tol2 * tol2 / ((X1 - X0) * (Y1 - Y0));
+        fits.push({ T: T, n: inl.length, rms: Math.sqrt(rs / inl.length), lam: lam, kin: kin, inl: inl });
+      });
+      if (!fits.length) { res.ms = Date.now() - t0; return res; }
+      var zsc = function (f) { return (f.n - f.lam) / Math.sqrt(f.lam + 1); };
+      fits.sort(function (p, q) { return zsc(q) - zsc(p); });
+      var B = fits[0], second = 0, n2 = 0;
+      // autre solution = qui placerait le point cherché ailleurs sur la photo (à plus d'une icône et demie)
+      var ptOf = function (T) { return [(near.x - T.ox) / T.s, (T.oy - near.y) / T.s]; }, pB = ptOf(B.T);
+      fits.forEach(function (f) { var q = ptOf(f.T); if (f !== B && Math.hypot(q[0] - pB[0], q[1] - pB[1]) > 1.5 * job.S) { second = Math.max(second, zsc(f)); n2 = Math.max(n2, f.n); } });
+      res.ok = true; res.n = B.n; res.lam = B.lam; res.z = zsc(B); res.z2 = second; res.n2 = n2; res.rms = B.rms; res.kin = B.kin; res.s = B.T.s;
+      res.tf = { a: B.T.s, b: 0, c: B.T.ox, d: 0, e: -B.T.s, f: B.T.oy };
+      res.pairs = B.inl.map(function (q) { return [Math.round(D[q.di].u), Math.round(D[q.di].v), K[2 * q.k], K[2 * q.k + 1]]; });
+      res.ms = Date.now() - t0;
+      return res;
+    }
+
+    return { run: run, detectScreen: detectScreen, screenGeom: screenGeom, warp: warp, prep: prep, textLines: textLines, nbMatch: nbMatch, icMatch: icMatch, icDetect: icDetect };
   }
 
   var AUTO_PX = 800;             // taille de l'image d'analyse (plus grand côté)
@@ -1299,6 +1638,8 @@
       ' if (d.op === "warp") { var o = CORE.warp(d.px, d.w, d.h, d.G, d.kin, d.kout); self.postMessage({ id: d.id, r: o }, [o.px.buffer]); return; }' +
       ' if (d.op === "prep") { self.postMessage({ id: d.id, r: { rect: CORE.prep(d.px, d.w, d.h) } }); return; }' +
       ' if (d.op === "text") { self.postMessage({ id: d.id, r: { lines: CORE.textLines(d.px, d.w, d.h) } }); return; }' +
+      ' if (d.op === "icons") { self.postMessage({ id: d.id, r: CORE.icMatch(d) }); return; }' +
+      ' if (d.op === "nb") { self.postMessage({ id: d.id, r: CORE.nbMatch(d, function (p) { self.postMessage({ id: d.id, p: p }); }) }); return; }' +
       ' var r = CORE.run(d, function (p) { self.postMessage({ id: d.id, p: p }); }); self.postMessage({ id: d.id, r: r }); }' +
       ' catch (err) { self.postMessage({ id: d.id, err: String((err && err.message) || err) }); } };';
   }
@@ -1329,6 +1670,8 @@
           if (job.op === 'warp') { res(autoLocal.warp(job.px, job.w, job.h, job.G, job.kin, job.kout)); return; }
           if (job.op === 'prep') { res({ rect: autoLocal.prep(job.px, job.w, job.h) }); return; }
           if (job.op === 'text') { res({ lines: autoLocal.textLines(job.px, job.w, job.h) }); return; }
+          if (job.op === 'icons') { var ri = autoLocal.icMatch(job); ri.local = true; res(ri); return; }
+          if (job.op === 'nb') { var rn = autoLocal.nbMatch(job, prog); rn.local = true; res(rn); return; }
           var r = autoLocal.run(job, prog); r.local = true; res(r);
         } catch (e) { rej(e); }
       }, 40);
@@ -1771,10 +2114,90 @@
     });
   }
 
+  /* ---------- Calage « par voisinage » : sur une capture déjà calée qui chevauche la nouvelle ----------
+     Utile pour les vues larges sans noms de lieux précis. Les deux images sont comparées par leurs contours (module du
+     gradient), dans le Web Worker : recherche multi-échelle par corrélation de phase, puis raffinement. */
+  var NB_PX = 512, nbCache = {}, ICON_H = 0.022; // ICON_H : taille d'une icône du jeu / hauteur de l'écran
+  function bandOf(w, h) { return Math.abs(w / h - 16 / 9) < 0.08 ? [0.085, 0.9] : [0, 1]; } // capture 16:9 : bandeaux du jeu ignorés
+  function smallPixels(url, maxpx) {
+    return loadImg(url).then(function (img) {
+      var w = img.naturalWidth, h = img.naturalHeight, k = Math.min(1, maxpx / Math.max(w, h));
+      var cw = Math.max(16, Math.round(w * k)), ch = Math.max(16, Math.round(h * k));
+      var c = document.createElement('canvas'); c.width = cw; c.height = ch;
+      var g = c.getContext('2d');
+      try { g.imageSmoothingQuality = 'high'; } catch (e) { /* */ }
+      g.drawImage(img, 0, 0, cw, ch);
+      var d = g.getImageData(0, 0, cw, ch); c.width = 1; c.height = 1;
+      return { px: d.data, w: cw, h: ch };
+    });
+  }
+  function nbPixels(it) {
+    var key = it.id + '|' + it.url;
+    if (nbCache[it.id] && nbCache[it.id].key === key) return Promise.resolve(nbCache[it.id].p);
+    return smallPixels(it.url, NB_PX).then(function (p) { nbCache[it.id] = { key: key, p: p }; return p; });
+  }
+  function worldBox(it) {
+    var t = it.tf, xs = [], ys = [];
+    [[0, 0], [it.w, 0], [0, it.h], [it.w, it.h]].forEach(function (p) { var q = apply(t, p[0], p[1]); xs.push(q[0]); ys.push(q[1]); });
+    return [Math.min.apply(null, xs), Math.min.apply(null, ys), Math.max.apply(null, xs), Math.max.apply(null, ys)];
+  }
+  function boxInter(a, b) { return Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0])) * Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1])); }
+  // captures déjà calées susceptibles de chevaucher la nouvelle (au plus 3) : dans la zone de l'assistant si on la connaît
+  function nbCandidates(it, zone) {
+    var c = items.filter(function (x) { return x !== it && !x.tmp && x.tf && x.url && isFinite(scaleOf(x.tf)); });
+    if (zone) {
+      var zb = zoneBox(zone, 1.6);
+      c = c.filter(function (x) { return boxInter(worldBox(x), zb) > 0; });
+      c.sort(function (p, q) { return boxInter(worldBox(q), zb) - boxInter(worldBox(p), zb); });
+    } else c.sort(function (p, q) { return q.created - p.created; });
+    return c.slice(0, 3);
+  }
+  function nbCalibrate(it, zone, prog) {
+    var nbs = nbCandidates(it, zone);
+    if (!nbs.length) return Promise.resolve(null);
+    return Promise.all([smallPixels(it.url, NB_PX)].concat(nbs.map(nbPixels))).then(function (arr) {
+      var A = arr[0], job = { op: 'nb', a: { px: A.px, w: A.w, h: A.h, band: bandOf(A.w, A.h) }, nbs: [] };
+      nbs.forEach(function (n, i) {
+        var P = arr[i + 1], kx = n.w / P.w, ky = n.h / P.h, t = n.tf;
+        job.nbs.push({ id: n.id, px: P.px, w: P.w, h: P.h, band: bandOf(P.w, P.h), tf: { a: t.a * kx, b: t.b * ky, c: t.c, d: t.d * kx, e: t.e * ky, f: t.f } });
+      });
+      if (zone) { var zw = zone.w; job.sMin = zw / 3.5 / A.w; job.sMax = zw * 3.5 / A.w; }
+      return runCore(job, prog || function () { /* */ }).then(function (r) {
+        if (!r || !r.ok || !r.tf) return { conf: 'bad', tf: null, info: r };
+        var q = A.w / it.w, q2 = A.h / it.h, t = r.tf;
+        var tf = { a: t.a * q, b: t.b * q2, c: t.c, d: t.d * q, e: t.e * q2, f: t.f, kind: 'sim' };
+        var ctr = apply(tf, it.w / 2, it.h / 2), b = X.land && X.land.bbox, inState = !b || (ctr[0] > b[0] - 3000 && ctr[0] < b[2] + 3000 && ctr[1] > b[1] - 3000 && ctr[1] < b[3] + 3000);
+        var conf = !inState || !isFinite(tf.a + tf.c + tf.f) ? 'bad' : r.ncc >= 0.5 && r.margin >= 0.18 ? 'good' : r.ncc >= 0.38 && r.margin >= 0.1 ? 'mid' : 'bad';
+        var src = items.filter(function (x) { return x.id === r.id; })[0];
+        return { conf: conf, tf: conf === 'bad' ? null : tf, ncc: r.ncc, margin: r.margin, worker: !r.local, name: src ? src.name : '',
+          info: { id: r.id, ncc: r.ncc, margin: r.margin, cov: r.cov, ms: r.ms, cands: r.cands, conf: conf, tf: tf } };
+      });
+    });
+  }
+
+  /* Calage par les icônes du jeu (mode « Où est-ce sur ma photo ? ») : { K: [x, y, …], near: { x, y } } */
+  function icCalibrate(it, icons, prog) {
+    return smallPixels(it.url, 1280).then(function (A) {
+      var job = { op: 'icons', px: A.px, w: A.w, h: A.h, band: bandOf(A.w, A.h), S: A.h * ICON_H, K: icons.K, near: icons.near, sMin: 500 / A.w, sMax: 9000 / A.w };
+      if (prog) prog(0.2);
+      return runCore(job, function () { /* */ }).then(function (r) {
+        if (prog) prog(1);
+        if (!r || !r.ok || !r.tf) return { conf: 'bad', tf: null, info: r && { dets: r.dets ? r.dets.length : 0, nk: r.nk, ms: r.ms } };
+        var q = A.w / it.w, q2 = A.h / it.h, t = r.tf;
+        var tf = { a: t.a * q, b: 0, c: t.c, d: 0, e: t.e * q2, f: t.f, kind: 'sim' };
+        // sûr : assez d'icônes appariées, bien au-dessus du hasard, et nettement mieux que toute autre position / échelle
+        var conf = r.n >= 6 && r.z >= 6 && (r.z2 < 0.6 * r.z || r.n2 <= 0.55 * r.n) ? 'good' : r.n >= 4 && r.z >= 3.5 && (r.z2 < 0.8 * r.z || r.n2 <= 0.75 * r.n) ? 'mid' : 'bad';
+        return { conf: conf, tf: conf === 'bad' ? null : tf, worker: !r.local, sig: Math.max(12, 1.5 * r.rms),
+          info: { n: r.n, n2: r.n2, z: r.z, z2: r.z2, lam: r.lam, rms: r.rms, dets: r.dets.length, nk: r.nk, kin: r.kin, ms: r.ms, conf: conf, pairs: r.pairs, detList: r.dets, sa: A.w / it.w } };
+      });
+    });
+  }
+
   /* Calage automatique d'une capture : renvoie { conf: 'good'|'mid'|'bad', tf (pixels de l'image stockée), r (détails) }.
      Si c'est une photo d'écran, l'image de la capture est remplacée par l'écran redressé (même si le calage échoue :
      le calage à la main est alors plus facile). */
-  function autoCalibrate(it, prog) {
+  function autoCalibrate(it, prog, opt) {
+    opt = opt || {};
     var land = flatLand();
     if (!land.polys.length) return Promise.resolve({ conf: 'bad', tf: null, r: { why: 'land' } });
     var t0 = Date.now(), pg = prog || function () { /* */ }, msg = function (m) { if (pg.msg) pg.msg(m); }, noop = function () { /* */ };
@@ -1803,41 +2226,74 @@
           var oc = useOcr ? ocrCalibrate(it, function (p) { pg(0.05 + 0.5 * p); }).catch(function (e) { return { err: String((e && e.message) || e) }; }) : Promise.resolve(null);
           return oc.then(function (o) {
             var strong = !!(o && o.tf && o.strong), p0 = useOcr ? 0.56 : 0.05;
-            msg(strong ? 'Calage automatique : vérification avec les côtes…' : 'Calage automatique de ta capture…');
-            // 3. recalage terre / eau : local autour des noms lus (fenêtre), sinon recherche complète (les noms lus servent d'indice)
-            var job = { px: a.px, w: a.w, h: a.h, polys: land.polys, holes: land.holes, rectify: rectify };
-            if (strong) {
-              // fenêtre : au moins ± 300 unités et ± 15 %, plus si les noms lus situent mal la capture (villes, lieux peu précis)
-              job.win = toRun(o.tf); job.win.dt = Math.max(300, Math.min(900, 1.5 * o.fit.sigPos)); job.win.ds = Math.max(0.15, Math.min(0.4, 1.5 * o.fit.sigScale));
-              var kp = k ? 1 / k.kout : kx;
-              job.win.pts = o.fit.inl.map(function (p) { return { u: p.u * kp, v: p.v * (k ? kp : ky), x: p.e.x, y: p.e.y, sig: p.sig, w: p.w }; });
-            }
-            else if (o && o.tf) job.seedTf = toRun(o.tf);
-            var run = runCore(job, function (p) { pg(p0 + (0.98 - p0) * p); });
-            if (strong) run = run.catch(function () { return { ok: false, why: 'err', local: false }; });
-            return run.then(function (r) {
-              r.aw = a.w; r.ah = a.h; r.worker = !r.local; r.ocr = o; r.rectified = !!k; r.totalMs = Date.now() - t0;
-              if (rect && !r.rect) r.rect = rect;
+            // 2b. icônes du jeu (mode « Où est-ce sur ma photo ? ») : constellation des pastilles appariée aux marqueurs visibles en jeu
+            var icP = opt.icons && inList && (!rect || !!k) ? icCalibrate(it, opt.icons, function (p) { pg(p0 + 0.1 * p); }).catch(function () { return null; }) : Promise.resolve(null);
+            return icP.then(function (ic) {
+            if (opt.icons) p0 += 0.1;
+            var icRes = function (r0) {
+              var r = { method: 'icones', score: ic.z, kind: 'sim', conf: ic.conf, ic: ic.info, ocr: o, rectified: !!k, aw: a.w, ah: a.h, worker: ic.worker,
+                totalMs: Date.now() - t0, rect: rect || null, other: r0 ? { method: r0.method, conf: r0.conf } : null };
               pg(1);
-              if (rect && !k) return { conf: 'bad', tf: null, r: r };
+              return { conf: ic.conf, tf: copyT(ic.tf), best: copyT(ic.tf), r: r, sig: ic.sig };
+            };
+            if (ic && ic.conf === 'good') return icRes(null);
+            // 3. pas de noms précis : calage « par voisinage » sur une capture déjà calée qui chevauche celle-ci
+            var nbOk = !strong && opt.nb !== false && inList && (!rect || !!k) && nbCandidates(it, opt.zone).length > 0;
+            if (nbOk) msg('Calage automatique : comparaison avec tes autres captures…');
+            var nbP = nbOk ? nbCalibrate(it, opt.zone, function (p) { pg(p0 + 0.25 * p); }).catch(function () { return null; }) : Promise.resolve(null);
+            return nbP.then(function (nbr) {
+              if (nbOk) p0 += 0.25;
+              var nbRes = function (r0) {
+                var r = { method: 'voisin', score: nbr.ncc, margin: nbr.margin, kind: 'sim', conf: nbr.conf, nb: nbr.info, ocr: o, rectified: !!k,
+                  aw: a.w, ah: a.h, worker: nbr.worker, totalMs: Date.now() - t0, rect: rect || null, coast: r0 ? { conf: r0.conf, score: r0.score } : null };
+                pg(1);
+                return { conf: nbr.conf, tf: copyT(nbr.tf), best: copyT(nbr.tf), r: r, nbName: nbr.name };
+              };
+              if (nbr && nbr.conf === 'good') return nbRes(null);
+              msg(strong ? 'Calage automatique : vérification avec les côtes…' : 'Calage automatique de ta capture…');
+              // 4. recalage terre / eau : local autour des noms lus (fenêtre), sinon recherche complète (les noms lus servent d'indice)
+              var job = { px: a.px, w: a.w, h: a.h, polys: land.polys, holes: land.holes, rectify: rectify };
               if (strong) {
-                var tfo = copyT(o.tf), tfl = r.ok && r.tf ? toStored(r.tf) : null;
-                var better = !!(tfl && isFinite(tfl.a + tfl.c + tfl.e + tfl.f) && r.gain >= 0.015);
-                var tf = better ? tfl : tfo;
-                tf.kind = 'sim';
-                r.method = better ? 'noms+cotes' : 'noms';
-                r.kind = 'sim';
-                // sûr : au moins 2 lieux précis cohérents (3 noms, ou 2 bien alignés, ou confirmés par les côtes) ; sinon « à vérifier »
-                var conf = o.fit.pts >= 2 && (o.fit.n >= 3 || better || o.fit.angRel < 0.5) ? 'good' : 'mid';
-                r.conf = conf;
-                return { conf: conf, tf: tf, best: tf, r: r, names: o.names };
+                // fenêtre : au moins ± 300 unités et ± 15 %, plus si les noms lus situent mal la capture (villes, lieux peu précis)
+                job.win = toRun(o.tf); job.win.dt = Math.max(300, Math.min(900, 1.5 * o.fit.sigPos)); job.win.ds = Math.max(0.15, Math.min(0.4, 1.5 * o.fit.sigScale));
+                var kp = k ? 1 / k.kout : kx;
+                job.win.pts = o.fit.inl.map(function (p) { return { u: p.u * kp, v: p.v * (k ? kp : ky), x: p.e.x, y: p.e.y, sig: p.sig, w: p.w }; });
               }
-              r.method = 'cotes';
-              if (!r.ok || !r.tf) return { conf: 'bad', tf: null, r: r };
-              var tf2 = toStored(r.tf);
-              tf2.kind = r.kind === 'affine' ? 'affine' : 'sim';
-              if (!isFinite(tf2.a + tf2.b + tf2.c + tf2.d + tf2.e + tf2.f)) return { conf: 'bad', tf: null, r: r };
-              return { conf: r.conf, tf: r.conf === 'bad' ? null : tf2, best: tf2, r: r };
+              else if (o && o.tf) job.seedTf = toRun(o.tf);
+              else if (nbr && nbr.conf === 'mid') job.seedTf = toRun(nbr.tf);
+              var run = runCore(job, function (p) { pg(p0 + (0.98 - p0) * p); });
+              if (strong) run = run.catch(function () { return { ok: false, why: 'err', local: false }; });
+              return run.then(function (r) {
+                r.aw = a.w; r.ah = a.h; r.worker = !r.local; r.ocr = o; r.rectified = !!k; r.totalMs = Date.now() - t0;
+                if (nbr) r.nb = nbr.info;
+                if (ic) r.ic = ic.info;
+                if (rect && !r.rect) r.rect = rect;
+                pg(1);
+                if (rect && !k) return { conf: 'bad', tf: null, r: r };
+                if (strong) {
+                  var tfo = copyT(o.tf), tfl = r.ok && r.tf ? toStored(r.tf) : null;
+                  var better = !!(tfl && isFinite(tfl.a + tfl.c + tfl.e + tfl.f) && r.gain >= 0.015);
+                  var tf = better ? tfl : tfo;
+                  tf.kind = 'sim';
+                  r.method = better ? 'noms+cotes' : 'noms';
+                  r.kind = 'sim';
+                  // sûr : au moins 2 lieux précis cohérents (3 noms, ou 2 bien alignés, ou confirmés par les côtes) ; sinon « à vérifier »
+                  var conf = o.fit.pts >= 2 && (o.fit.n >= 3 || better || o.fit.angRel < 0.5) ? 'good' : 'mid';
+                  r.conf = conf;
+                  return { conf: conf, tf: tf, best: tf, r: r, names: o.names };
+                }
+                r.method = 'cotes';
+                var coastOk = r.ok && r.tf && r.conf !== 'bad';
+                // voisinage « à vérifier » : préféré à un échec (ou à un calage par les côtes lui aussi douteux)
+                if (nbr && nbr.conf === 'mid' && (!coastOk || r.conf !== 'good')) return nbRes(r);
+                if (ic && ic.conf === 'mid' && (!coastOk || r.conf !== 'good')) return icRes(r);
+                if (!r.ok || !r.tf) return { conf: 'bad', tf: null, r: r };
+                var tf2 = toStored(r.tf);
+                tf2.kind = r.kind === 'affine' ? 'affine' : 'sim';
+                if (!isFinite(tf2.a + tf2.b + tf2.c + tf2.d + tf2.e + tf2.f)) return { conf: 'bad', tf: null, r: r };
+                return { conf: r.conf, tf: r.conf === 'bad' ? null : tf2, best: tf2, r: r };
+              });
+            });
             });
           });
         });
@@ -1847,7 +2303,7 @@
   function autoInfo(it, o) {
     var r = o.r || {};
     return { id: it.id, conf: o.conf, score: r.score, margin: r.margin, ms: r.totalMs, worker: r.worker, kind: r.kind, rectified: !!r.rectified,
-      method: r.method, names: o.names || null, ocr: r.ocr || null, seedScore: r.seedScore,
+      method: r.method, names: o.names || null, ocr: r.ocr || null, seedScore: r.seedScore, nb: r.nb || null, nbName: o.nbName || null, ic: r.ic || null,
       rect: r.rect ? { H: r.rect.H, u0: r.rect.u0, SH: r.rect.SH, aw: r.aw, ah: r.ah } : null, info: r.info, tf: copyT(o.tf), best: copyT(o.best) };
   }
   function namesMsg(names) {
@@ -1874,9 +2330,10 @@
       busyShow(''); busyProg(null);
       it.tf = copyT(o.tf); it.pts = []; it.show = true;
       saveMeta(it); syncLayers(); renderList();
-      adjOpen(it, true, { auto: o.conf, prev: prev, names: o.names });
+      adjOpen(it, true, { auto: o.conf, prev: prev, names: o.names, nb: o.nbName });
       fitTo(it);
-      X.toast(o.names ? namesMsg(o.names) + (o.conf === 'good' ? ' ✔' : ' : vérifie-le') : o.conf === 'good' ? 'Calage automatique ✔' : 'Calage automatique fait : vérifie-le');
+      X.toast(o.names ? namesMsg(o.names) + (o.conf === 'good' ? ' ✔' : ' : vérifie-le') : o.nbName ? 'Calée sur ta capture « ' + o.nbName + ' »' + (o.conf === 'good' ? ' ✔' : ' : vérifie-la') :
+        o.conf === 'good' ? 'Calage automatique ✔' : 'Calage automatique fait : vérifie-le');
     }).catch(function () { lastAuto = { id: it.id, conf: 'error' }; fail('err'); });
   }
 
@@ -1979,11 +2436,13 @@
     return d;
   }
 
-  function calOpen(it, isNew, note) {
+  function calOpen(it, isNew, note, opt) {
     if (!REP.length) resolveReperes();
     X.closeSheet(); X.closePanel();
     if (adj) adjClose(false);
-    cal = { it: it, isNew: isNew, pts: [null, null], tgt: defaultTargets(it), k: 0, touched: false, want3: false, note: note || '' };
+    var zone = opt && opt.zone, tgt = defaultTargets(it);
+    if (zone && zone.rep && zone.rep.length >= 2) tgt = [zone.rep[0], zone.rep[1], zone.rep[2] || tgt[2]]; // repères de la zone de l'assistant
+    cal = { it: it, isNew: isNew, pts: [null, null], tgt: tgt, k: 0, touched: false, want3: false, note: note || '', zone: zone || null };
     var c = $('cal'); c.hidden = false;
     document.body.classList.add('mybg-cal');
     if (!calMap) {
@@ -2123,6 +2582,7 @@
     cal = null;
     $('cal').hidden = true; $('calPick').hidden = true;
     document.body.classList.remove('mybg-cal');
+    if (wiz.watch) setTimeout(wizBack, 0);
     return { it: it, wasNew: wasNew };
   }
   function calCancel() {
@@ -2168,6 +2628,10 @@
       res.forEach(function (r) { box.appendChild(row(r)); });
       return;
     }
+    if (cal.zone && cal.zone.rep && cal.zone.rep.length) {
+      head('Dans la zone « ' + cal.zone.n + ' »');
+      cal.zone.rep.forEach(function (r) { box.appendChild(row(r)); });
+    }
     head('Bien visibles sur la carte entière');
     REP.filter(function (r) { return r.z === 'all'; }).forEach(function (r) { box.appendChild(row(r)); });
     head('Pour une capture zoomée sur Vice City');
@@ -2180,7 +2644,7 @@
     X.closeSheet(); if (!X.isWide()) X.closePanel();
     if (adj) adjClose(false);
     adj = { it: it, t0: copyT(it.tf), check: !!check, ptrs: {}, g: null, mode: null, maxB: X.map.options.maxBounds || null,
-      auto: auto ? auto.auto : '', prev: auto ? auto.prev : undefined, names: auto ? auto.names : null };
+      auto: auto ? auto.auto : '', prev: auto ? auto.prev : undefined, names: auto ? auto.names : null, nb: auto ? auto.nb : null };
     if (adj.maxB) X.map.setMaxBounds(null); // libre pendant la vérification (la barre du bas cache une partie de l'écran)
     if (!it.show) { it.show = true; syncLayers(); renderList(); }
     document.body.classList.add('mybg-adjust');
@@ -2194,6 +2658,10 @@
       $('adjText').textContent = adj.auto === 'good' ?
         'Vérifie : les contours bleus doivent suivre les côtes de ta capture. Si c\'est bon, touche « C\'est bon ». Un petit décalage ? « Bouger la capture ». Complètement faux ? « Caler à la main ».' :
         'L\'app n\'est pas sûre d\'elle : regarde si les contours bleus suivent bien les côtes de ta capture (zoome si besoin). Si c\'est bon, touche « C\'est bon ». Sinon, « Caler à la main ».';
+      if (adj.nb) {
+        $('adjText').textContent = 'Calée en la comparant à ta capture « ' + adj.nb + ' »' + (adj.auto === 'good' ? ' ✔ ' : '. ') +
+          'Vérifie que les routes et les côtes se raccordent bien. Un petit décalage ? « Bouger la capture ». Complètement faux ? « Caler à la main ».';
+      }
       if (adj.names && adj.names.length) {
         $('adjText').textContent = namesMsg(adj.names) + (adj.auto === 'good' ? ' ✔ ' : '. ') +
           'Vérifie que les points de l\'app tombent au bon endroit sur ta capture (nos contours bleus des côtes sont approximatifs). Un petit décalage ? « Bouger la capture ». Complètement faux ? « Caler à la main ».';
@@ -2224,6 +2692,7 @@
   function adjClose(keep) {
     if (!adj) return;
     var it = adj.it;
+    if (keep && wiz.watch && wiz.watch.id === it.id) wiz.watch.ok = true;
     if (!keep) { it.tf = adj.t0; if (it.layer) it.layer.setTf(it.tf); }
     else saveMeta(it);
     setAdjMode('map');
@@ -2234,6 +2703,7 @@
     document.body.classList.remove('mybg-adjust', 'mybg-drag');
     $('adj').hidden = true;
     renderList();
+    if (wiz.watch) setTimeout(wizBack, 0);
   }
   function setTf(t) { adj.it.tf = t; if (adj.it.layer) adj.it.layer.setTf(t); }
   function zs() { return Math.pow(2, X.map.getZoom()); }
@@ -2330,6 +2800,566 @@
   function tutoClose() { $('tuto').hidden = true; }
   function pickFile() { var f = $('mybgFile'); f.value = ''; f.click(); }
 
+  /* ---------- Assistant « Ma carte du jeu en 6 photos » ----------
+     6 zones qui couvrent tout l'État (avec chevauchement), cadrage 16:9 comme l'écran du jeu. Pour chaque zone : schéma,
+     consigne, import d'une photo, calage automatique (noms lus, voisinage, côtes) ou calage à la main avec les repères de la zone.
+     État mémorisé (X.store « mbw ») : zone -> capture. Rien n'est envoyé sur Internet. */
+  var ZONES = [
+    { id: 'vc', n: 'Vice City (centre)', x: -800, y: 700, w: 7200, on: 'le centre-ville de Vice City', a: 'l\'aéroport (à gauche)', b: 'Vice Beach (à droite)',
+      rq: [['Aéroport international de Vice City', 'Vice City International Airport'], ['Ocean View Hotel'], ['Fleeca Field'], ['Grande roue de Vice City'], ['Port de Vice City'], ['Pont Rivo']] },
+    { id: 'west', n: 'Port Gellhorn & Capri (ouest)', x: -6300, y: 2200, w: 8800, on: 'Gellhorn', a: 'Port Gellhorn (en haut)', b: 'Capri (en bas)',
+      rq: [['Port Gellhorn'], ['Capri'], ['Gellhorn International Raceway'], ['Pont Bocamar', 'Bocamar Bridge'], ['Wild Hog Airfield'], ['Belpoint Lighthouse'], ['Emerald Bridge']] },
+    { id: 'lake', n: 'Ambrosia, lac Leonida & Waning Sands', x: -2600, y: 5000, w: 8800, on: 'le lac Leonida', a: 'Ambrosia (à gauche)', b: 'Waning Sands (à droite)',
+      rq: [['Ambrosia'], ['Waning Sands'], ['Lac Leonida', 'Lake Leonida'], ['Belville'], ['Sundown Private Airfield'], ['Ambrosia Raceway Park'], ['Vice City Casino']] },
+    { id: 'north', n: 'Mount Kalaga & le nord', x: -4300, y: 7500, w: 8800, on: 'Mount Kalaga National Park', a: 'Grayson (à gauche)', b: 'Moreau (en haut)',
+      rq: [['Grayson'], ['Moreau'], ['Millport'], ['Bonanza Giant'], ['Dawson Dam'], ['Hoffman Observatory']] },
+    { id: 'south', n: 'Grassrivers (sud de Vice City)', x: -3600, y: -2900, w: 9200, on: 'Grassrivers', a: 'Watson Bay (à gauche)', b: 'Bluegrass (à droite)',
+      rq: [['Henry J Edwards Airport'], ['Phare de Catalan Key', 'Catalan Key Lighthouse'], ['Leonida Penitentiary'], ['Boone Speedway'], ['Fuzzard Power Station'], ['Bluegrass'], ['Watson Bay']] },
+    { id: 'keys', n: 'Leonida Keys', x: -4600, y: -6300, w: 9200, on: 'les îles des Keys', a: 'Southwind (à gauche)', b: 'Key Lento (à droite)',
+      rq: [['Base aérienne de Mile Zero', 'Mile Zero Air Station'], ['Key Lento'], ['Seven Mile Bridge'], ['Southpoint Airfield'], ['Southwind'], ['Lento Causeway']] }
+  ];
+  ZONES.forEach(function (z) { z.h = z.w * 9 / 16; });
+  function zoneBox(z, k) { k = k || 1; return [z.x - k * z.w / 2, z.y - k * z.h / 2, z.x + k * z.w / 2, z.y + k * z.h / 2]; }
+  function zoneById(id) { return ZONES.filter(function (z) { return z.id === id; })[0] || null; }
+  function resolveZoneReps(byName) {
+    ZONES.forEach(function (z) {
+      var b = zoneBox(z, 1.05);
+      z.rep = [];
+      z.rq.forEach(function (q, i) {
+        for (var j = 0; j < q.length; j++) {
+          var f = byName[X.norm(q[j])];
+          if (f && f.x >= b[0] && f.x <= b[2] && f.y >= b[1] && f.y <= b[3]) { z.rep.push({ key: 'z' + z.id + i, n: f.n, x: f.x, y: f.y, h: 'Repère de la zone « ' + z.n + ' ».', z: 'zone' }); return; }
+        }
+      });
+    });
+  }
+
+  var wiz = { st: null, el: null, file: null, zone: null, watch: null, open: false, msg: {} };
+  function wizState() {
+    if (!wiz.st) { var s = X.store.get('mbw', null); wiz.st = s && typeof s === 'object' && s.z ? s : { z: {} }; }
+    return wiz.st;
+  }
+  function wizSave() { X.store.set('mbw', wizState()); }
+  function itemById(id) { return items.filter(function (x) { return x.id === id; })[0] || null; }
+  // met l'état en accord avec les captures existantes (une capture supprimée libère sa zone)
+  function wizSync() {
+    if (!X || !wiz.loaded) return;
+    var S = wizState(), ch = false;
+    Object.keys(S.z).forEach(function (k) {
+      var e = S.z[k], it = itemById(e.id);
+      if (!zoneById(k) || !it) { delete S.z[k]; ch = true; return; }
+      var st = it.tf ? (e.st === 'fail' ? 'ok' : e.st) : 'fail';
+      if (st !== e.st) { e.st = st; ch = true; }
+    });
+    if (ch) wizSave();
+    wizCta();
+    if (wiz.open) wizRender();
+  }
+  function wizDone() { var S = wizState(); return ZONES.filter(function (z) { var e = S.z[z.id]; return e && e.st !== 'fail'; }).length; }
+
+  function wizCss() {
+    if (document.getElementById('mbwStyle')) return;
+    var st = document.createElement('style'); st.id = 'mbwStyle';
+    st.textContent = [
+      '.mbw-cta{display:flex;align-items:center;gap:12px;width:100%;min-height:64px;margin:4px 0 10px;padding:10px 12px;border-radius:16px;text-align:left;color:var(--text,#eef3ff);',
+      'border:1px solid rgba(255,46,151,.6);background:linear-gradient(135deg,rgba(255,46,151,.22),rgba(34,230,255,.10));box-shadow:0 0 18px rgba(255,46,151,.25)}',
+      '.mbw-cta:active{transform:scale(.99)}',
+      '.mbw-cta .mbw-ci{flex:0 0 40px;width:40px;height:40px;display:grid;place-items:center;border-radius:12px;background:var(--pink,#ff2e97);color:#fff;font-weight:800;font-size:18px}',
+      '.mbw-cta b{display:block;font-size:17px;line-height:1.15}.mbw-cta small{display:block;color:var(--muted,#a3acd6);font-size:13px;font-weight:600;margin-top:2px}',
+      '.mbw-cta .mbw-cbar{display:block;height:5px;border-radius:3px;background:rgba(255,255,255,.12);margin-top:6px;overflow:hidden}.mbw-cta .mbw-cbar i{display:block;height:100%;background:var(--ok,#4dffa6)}',
+      '.mbw{position:absolute;inset:0;z-index:2400;display:flex;flex-direction:column;background:var(--bg,#070b1f);color:var(--text,#eef3ff)}',
+      '@media (min-width:700px){.mbw{background:rgba(3,5,18,.78);align-items:center}.mbw>.mbw-in{width:min(600px,100%);border-left:1px solid rgba(255,46,151,.35);border-right:1px solid rgba(255,46,151,.35)}}',
+      '.mbw>.mbw-in{flex:1;min-height:0;display:flex;flex-direction:column;background:var(--bg,#070b1f)}',
+      'body.mbw-open #toast{z-index:2450}',
+      '.mbw-head{padding:calc(8px + var(--sat,0px)) 10px 10px 16px;border-bottom:1px solid var(--line,rgba(120,140,255,.18))}',
+      '.mbw-top{display:flex;align-items:center;justify-content:space-between;gap:8px}.mbw-top h2{margin:0;font-size:20px;line-height:1.15;color:var(--cyan,#22e6ff)}',
+      '.mbw-prog{display:flex;align-items:center;gap:10px;margin-top:8px;font-weight:700}.mbw-bar{flex:1;height:10px;border-radius:5px;background:rgba(255,255,255,.1);overflow:hidden}',
+      '.mbw-bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--ok,#4dffa6),var(--cyan,#22e6ff));transition:width .3s}',
+      '.mbw-body{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:10px 12px 16px}',
+      '.mbw-intro{margin:2px 4px 10px;color:var(--muted,#a3acd6);font-size:15px;line-height:1.35}',
+      '.mbw-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}',
+      '.mbw-z{border:1px solid rgba(160,170,255,.28);border-radius:16px;padding:10px;background:rgba(255,255,255,.03)}',
+      '.mbw-z.ok{border-color:rgba(77,255,166,.6);background:rgba(77,255,166,.06)}.mbw-z.mid{border-color:rgba(255,225,77,.6)}.mbw-z.fail{border-color:rgba(255,90,130,.6)}',
+      '.mbw-z.cur{box-shadow:0 0 0 1px rgba(34,230,255,.5),0 0 16px rgba(34,230,255,.2)}',
+      '.mbw-zh{display:flex;gap:10px;align-items:flex-start}',
+      '.mbw-map{flex:0 0 76px;width:76px;height:auto}.mbw-map path{fill:#1c1648;stroke:#33e1ff;stroke-width:.8}',
+      '.mbw-map .zr{fill:rgba(255,46,151,.35);stroke:var(--pink,#ff2e97);stroke-width:2}.mbw-map .zd{fill:rgba(77,255,166,.22);stroke:none}',
+      '.mbw-zt{flex:1;min-width:0}.mbw-zt b{display:block;font-size:17px;line-height:1.2}',
+      '.mbw-num{display:inline-grid;place-items:center;width:24px;height:24px;margin-right:6px;border-radius:50%;background:rgba(255,255,255,.12);font-size:14px;vertical-align:1px}',
+      '.mbw-z.ok .mbw-num{background:var(--ok,#4dffa6);color:#04220f}.mbw-z.mid .mbw-num{background:#ffe14d;color:#2a2200}.mbw-z.fail .mbw-num{background:#ff5a82;color:#fff}',
+      '.mbw-st{display:block;margin-top:3px;font-size:14px;font-weight:700;color:var(--muted,#a3acd6)}.mbw-z.ok .mbw-st{color:var(--ok,#4dffa6)}.mbw-z.mid .mbw-st{color:#ffe14d}.mbw-z.fail .mbw-st{color:#ff7b9c}',
+      '.mbw-th{flex:0 0 78px;width:78px;height:52px;object-fit:cover;border-radius:8px;border:1px solid rgba(77,255,166,.6)}',
+      '.mbw-how{margin:8px 2px 0;font-size:15px;line-height:1.4}.mbw-how b{color:var(--cyan,#22e6ff)}',
+      '.mbw-note{margin:8px 2px 0;font-size:14px;line-height:1.35;color:#ffe14d}.mbw-z.fail .mbw-note{color:#ff9fb6}.mbw-z.ok .mbw-note{color:var(--ok,#4dffa6)}',
+      '.mbw-z .btn{width:100%;margin-top:8px;min-height:48px}',
+      '.mbw-foot{padding:10px 12px calc(10px + var(--sab,0px));border-top:1px solid var(--line,rgba(120,140,255,.18))}',
+      '.mbw-foot .btn{width:100%;min-height:52px;font-size:17px}.mbw-foot .btn[disabled]{opacity:.45}',
+      '.mbw-offer{position:absolute;inset:0;z-index:2350;display:grid;place-items:end center;background:rgba(3,5,18,.55);padding:12px 12px calc(12px + var(--sab,0px))}',
+      '@media (min-width:700px){.mbw-offer{place-items:center}}',
+      '.mbw-ob{width:min(460px,100%);border-radius:20px;padding:16px;background:var(--bg2,#0d1235);border:1px solid rgba(255,46,151,.55);box-shadow:0 0 40px rgba(255,46,151,.3)}',
+      '.mbw-ob h2{margin:0 0 6px;font-size:20px;color:var(--cyan,#22e6ff)}.mbw-ob p{margin:0 0 12px;font-size:15px;line-height:1.4;color:var(--text,#eef3ff)}',
+      '.mbw-ob .rowbtns{display:flex;gap:8px}.mbw-ob .btn{flex:1;min-height:50px}'
+    ].join('\n');
+    document.head.appendChild(st);
+  }
+  function zoneSvg(z) {
+    if (!miniBox) return '';
+    var m = miniBox, S = wizState(), d = '';
+    var R = function (zz, cls) {
+      var b = zoneBox(zz), x = (b[0] - m.b[0]) * m.sx, y = (m.b[3] - b[3]) * m.sy;
+      return '<rect class="' + cls + '" x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + ((b[2] - b[0]) * m.sx).toFixed(1) + '" height="' + ((b[3] - b[1]) * m.sy).toFixed(1) + '" rx="2"/>';
+    };
+    ZONES.forEach(function (zz) { var e = S.z[zz.id]; if (zz !== z && e && e.st !== 'fail') d += R(zz, 'zd'); });
+    return '<svg class="mbw-map" viewBox="-4 -4 ' + (m.W + 8) + ' ' + (m.H + 8) + '" aria-hidden="true">' + d + '<path d="' + miniPath + '"/>' + R(z, 'zr') + '</svg>';
+  }
+  function wizCta() {
+    var sec = $('mybgSec');
+    if (!sec) return;
+    var b = $('mbwOpen');
+    if (!b) {
+      b = document.createElement('button'); b.type = 'button'; b.id = 'mbwOpen'; b.className = 'mbw-cta';
+      var ref = sec.querySelector('#mybgList') || sec.querySelector('#mybgImport');
+      if (ref) sec.insertBefore(b, ref); else sec.appendChild(b);
+      b.addEventListener('click', function () { wizOpen(); });
+    }
+    var n = wizDone();
+    b.innerHTML = '<span class="mbw-ci">6</span><span style="flex:1;min-width:0"><b>Ma carte du jeu en 6 photos</b><small>' +
+      (n ? (n >= ZONES.length ? 'Carte complète ✓ · ' : 'Reprendre · ') + n + '/' + ZONES.length + ' zones' : 'Assistant guidé : la vraie carte du jeu sous tes points') +
+      '</small>' + (n ? '<span class="mbw-cbar"><i style="width:' + Math.round(100 * n / ZONES.length) + '%"></i></span>' : '') + '</span>';
+  }
+  function wizBuild() {
+    if (wiz.el) return;
+    wizCss();
+    var el = document.createElement('div');
+    el.id = 'mbw'; el.className = 'mbw'; el.hidden = true;
+    el.setAttribute('role', 'dialog'); el.setAttribute('aria-modal', 'true'); el.setAttribute('aria-labelledby', 'mbwT');
+    el.innerHTML = '<div class="mbw-in"><div class="mbw-head"><div class="mbw-top"><h2 id="mbwT">Ma carte du jeu en 6 photos</h2>' +
+      '<button id="mbwX" class="iconbtn" type="button" aria-label="Fermer l\'assistant">' + ICONS.use('ui_close') + '</button></div>' +
+      '<div class="mbw-prog"><div class="mbw-bar" role="progressbar" aria-valuemin="0" aria-valuemax="' + ZONES.length + '"><i></i></div><span id="mbwN">0/' + ZONES.length + '</span></div></div>' +
+      '<div class="mbw-body"><p class="mbw-intro">Pour chaque zone : ouvre la carte dans le jeu, cadre-la comme indiqué, fais une capture (bouton <b>Create</b> de la manette, ou photo de la télé <b>bien de face</b>), puis importe-la ici. L\'app la place toute seule. Tes photos restent sur ton téléphone.</p>' +
+      '<ol class="mbw-list" id="mbwList"></ol></div>' +
+      '<div class="mbw-foot"><button id="mbwGo" class="btn primary" type="button">' + ICONS.use('ui_check') + '<span>Voir ma carte</span></button></div></div>';
+    var f = document.createElement('input');
+    f.type = 'file'; f.accept = 'image/*'; f.id = 'mbwFile'; f.className = 'vh'; f.tabIndex = -1; f.setAttribute('aria-hidden', 'true');
+    el.appendChild(f);
+    document.body.appendChild(el);
+    wiz.el = el; wiz.file = f;
+    $('mbwX').addEventListener('click', function () { wizClose(); });
+    $('mbwGo').addEventListener('click', wizShowMap);
+    f.addEventListener('change', function () { var z = wiz.zone, fl = this.files && this.files[0]; if (z && fl) wizImport(z, fl); });
+    $('mbwList').addEventListener('click', function (e) {
+      var b = e.target.closest ? e.target.closest('button[data-a]') : null; if (!b) return;
+      var z = zoneById(b.getAttribute('data-z')), a = b.getAttribute('data-a'); if (!z) return;
+      if (a === 'imp') { wiz.zone = z; wiz.file.value = ''; wiz.file.click(); }
+      else if (a === 'man') wizManual(z);
+      else if (a === 'chk') wizCheck(z);
+    });
+  }
+  function wizRender() {
+    if (!wiz.el) return;
+    var S = wizState(), n = wizDone(), cur = null, h = '';
+    ZONES.forEach(function (z) { var e = S.z[z.id]; if (!cur && (!e || e.st === 'fail')) cur = z; });
+    ZONES.forEach(function (z, i) {
+      var e = S.z[z.id], it = e ? itemById(e.id) : null, st = e ? e.st : 'todo', m = wiz.msg[z.id] || '';
+      var lab = st === 'ok' ? 'Calée ✓' : st === 'mid' ? 'Calée : à vérifier' : st === 'fail' ? 'Pas encore calée' : 'À faire';
+      h += '<li class="mbw-z ' + st + (z === cur ? ' cur' : '') + '" data-z="' + z.id + '"><div class="mbw-zh">' + zoneSvg(z) +
+        '<div class="mbw-zt"><b><span class="mbw-num">' + (st === 'ok' || st === 'mid' ? '✓' : i + 1) + '</span>' + X.esc(z.n) + '</b><span class="mbw-st">' + lab + '</span></div>' +
+        (it && it.tf ? '<img class="mbw-th" alt="" src="' + X.esc(it.url) + '">' : '') + '</div>';
+      if (st !== 'ok' && st !== 'mid') {
+        h += '<p class="mbw-how">Dans le jeu, centre la carte sur <b>' + X.esc(z.on) + '</b>, zoome jusqu\'à voir à la fois <b>' + X.esc(z.a) + '</b> et <b>' + X.esc(z.b) +
+          '</b>, puis capture avec le bouton <b>Create</b> (ou prends une photo bien de face).</p>';
+      }
+      if (m) h += '<p class="mbw-note">' + X.esc(m) + '</p>';
+      if (st === 'fail' && it) h += '<button type="button" class="btn primary" data-a="man" data-z="' + z.id + '">' + ICONS.use('ui_center') + 'Caler à la main (repères de cette zone)</button>';
+      if (st === 'mid') h += '<button type="button" class="btn" data-a="chk" data-z="' + z.id + '">' + ICONS.use('ui_move') + 'Vérifier le calage</button>';
+      h += '<button type="button" class="btn' + (st === 'todo' ? ' primary' : '') + '" data-a="imp" data-z="' + z.id + '">' + ICONS.use('ui_upload') +
+        (st === 'todo' ? 'Importer la photo de cette zone' : st === 'fail' ? 'Importer une autre photo' : 'Remplacer la photo') + '</button></li>';
+    });
+    $('mbwList').innerHTML = h;
+    $('mbwN').textContent = n + '/' + ZONES.length + ' zones';
+    var bar = wiz.el.querySelector('.mbw-bar'); bar.setAttribute('aria-valuenow', n);
+    bar.firstChild.style.width = Math.round(100 * n / ZONES.length) + '%';
+    var go = $('mbwGo'); go.disabled = !n;
+    go.lastChild.textContent = n >= ZONES.length ? 'Voir ma carte complète' : 'Voir ma carte';
+  }
+  function wizOpen() {
+    if (!X) return;
+    wizBuild(); wizSync();
+    X.closeSheet(); if (!X.isWide()) X.closePanel();
+    wiz.open = true; wiz.el.hidden = false; document.body.classList.add('mbw-open');
+    var o = $('mbwOffer'); if (o) o.remove();
+    wizRender();
+    var c = wiz.el.querySelector('.mbw-z.cur'); if (c && c.scrollIntoView) { try { c.scrollIntoView({ block: 'nearest' }); } catch (e) { /* */ } }
+  }
+  function wizHide() { if (wiz.el) wiz.el.hidden = true; document.body.classList.remove('mbw-open'); }
+  function wizClose() { wiz.open = false; wiz.watch = null; wizHide(); wizCta(); }
+  // quitte l'assistant et montre tout l'État avec toutes les captures de l'assistant
+  function wizShowMap() {
+    var S = wizState();
+    Object.keys(S.z).forEach(function (k) { var it = itemById(S.z[k].id); if (it && it.tf && !it.show) { it.show = true; saveMeta(it); } });
+    syncLayers(); renderList();
+    wizClose();
+    X.closeSheet(); if (!X.isWide()) X.closePanel();
+    var b = X.land && X.land.bbox;
+    if (b) X.map.fitBounds(L.latLngBounds([[b[1], b[0]], [b[3], b[2]]]), { padding: [12, 12], animate: false });
+    var n = wizDone();
+    X.toast(n >= ZONES.length ? 'Ta carte du jeu est complète ✓' : 'Ta carte du jeu : ' + n + '/' + ZONES.length + ' zones. Reprends l\'assistant quand tu veux.');
+  }
+  function zoneCovers(z, it) {
+    var b = worldBox(it), zb = zoneBox(z), c = [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2], zb2 = zoneBox(z, 1.3);
+    return (c[0] >= zb2[0] && c[0] <= zb2[2] && c[1] >= zb2[1] && c[1] <= zb2[3]) || boxInter(b, zb) >= 0.35 * (zb[2] - zb[0]) * (zb[3] - zb[1]);
+  }
+  function zoneOf(it) {
+    var b = worldBox(it), best = null, bi = 0;
+    ZONES.forEach(function (z) { var v = boxInter(b, zoneBox(z)) / (z.w * z.h); if (v > bi) { bi = v; best = z; } });
+    return best;
+  }
+  function quietRemove(it) {
+    if (it.layer && X.map.hasLayer(it.layer)) X.map.removeLayer(it.layer);
+    items = items.filter(function (x) { return x !== it; });
+    delete nbCache[it.id];
+    try { if (String(it.url).indexOf('blob:') === 0) URL.revokeObjectURL(it.url); } catch (e) { /* */ }
+    removeStored(it.id);
+  }
+  function wizImport(z, file) {
+    if (file.type && file.type.indexOf('image/') !== 0) { wiz.msg[z.id] = 'Ce fichier n\'est pas une image.'; wizRender(); return; }
+    var lab = z.n;
+    busyShow(lab + ' : préparation…'); busyProg(0);
+    importFile(file).then(function (o) {
+      var it = o.it;
+      it.name = z.n; saveMeta(it);
+      if (o.pre) return { it: it, conf: 'good' };
+      if (!autoOn()) return { it: it, conf: 'bad' };
+      busyShow(lab + ' : calage automatique…');
+      var pg = function (p) { busyProg(p); };
+      pg.msg = function (m) { busyShow(lab + ' : ' + (/^Calage automatique : /.test(m) ? m.replace(/^Calage automatique : /, '') : 'calage automatique…')); };
+      return autoCalibrate(it, pg, { zone: z }).then(function (a) {
+        lastAuto = autoInfo(it, a); autoLog.push(lastAuto);
+        var ok = a.tf && a.conf !== 'bad';
+        if (ok) { it.tf = copyT(a.tf); it.pts = []; it.show = true; saveMeta(it); }
+        return { it: it, conf: ok ? a.conf : 'bad', a: a };
+      }, function () { return { it: it, conf: 'bad' }; });
+    }).then(function (r) {
+      busyShow(''); busyProg(null);
+      var S = wizState(), it = r.it, target = z, note = '';
+      if (it.tf && !zoneCovers(z, it)) {
+        var z2 = zoneOf(it);
+        if (z2 && z2 !== z) { target = z2; note = 'Cette photo montre plutôt « ' + z2.n + ' » : elle a été rangée dans cette zone.'; it.name = z2.n; saveMeta(it); }
+      }
+      var prev = S.z[target.id], old = prev ? itemById(prev.id) : null;
+      S.z[target.id] = { id: it.id, st: it.tf ? (r.conf === 'mid' ? 'mid' : 'ok') : 'fail' };
+      // nouvelle photo bien calée pour la même zone : l'ancienne est remplacée
+      if (it.tf && old && old !== it && target === z) quietRemove(old);
+      wizSave();
+      var how = r.a && r.a.r ? r.a.r.method : '';
+      wiz.msg[z.id] = ''; wiz.msg[target.id] = '';
+      if (note) wiz.msg[z.id] = note;
+      if (!it.tf) wiz.msg[target.id] = 'L\'app n\'a pas réussi à placer cette photo toute seule. Touche « Caler à la main » : elle te propose les repères de cette zone.';
+      else if (r.conf === 'mid') wiz.msg[target.id] = (note ? note + ' ' : '') + 'Placée, mais l\'app n\'est pas sûre d\'elle : touche « Vérifier le calage ».';
+      else if (note) wiz.msg[target.id] = note;
+      else wiz.msg[target.id] = how === 'voisin' ? 'Placée en la comparant à ta capture « ' + ((r.a && r.a.nbName) || 'voisine') + ' » ✓' : how && how.indexOf('noms') === 0 ? 'Placée grâce aux noms de lieux lus ✓' : 'Placée automatiquement ✓';
+      syncLayers(); renderList(); wizCta(); wizRender();
+      var c = wiz.el.querySelector('.mbw-z[data-z="' + target.id + '"]'); if (c && c.scrollIntoView) { try { c.scrollIntoView({ block: 'nearest' }); } catch (e) { /* */ } }
+    }).catch(function () {
+      busyShow(''); busyProg(null);
+      wiz.msg[z.id] = 'Impossible de lire cette image. Essaie une capture en JPEG ou PNG.'; wizRender();
+    });
+  }
+  function wizManual(z) {
+    var e = wizState().z[z.id], it = e ? itemById(e.id) : null; if (!it) return;
+    wiz.watch = { z: z.id, id: it.id, ok: false };
+    wizHide();
+    calOpen(it, false, 'Place 2 repères de la zone « ' + z.n + ' » sur ta photo.', { zone: z });
+  }
+  function wizCheck(z) {
+    var e = wizState().z[z.id], it = e ? itemById(e.id) : null; if (!it || !it.tf) return;
+    wiz.watch = { z: z.id, id: it.id, ok: false };
+    wizHide();
+    adjOpen(it, true, { auto: 'mid', prev: copyT(it.tf) });
+    fitTo(it);
+  }
+  // retour dans l'assistant quand le calage à la main / la vérification est terminé
+  function wizBack() {
+    if (!wiz.watch || cal || adj) return;
+    var w = wiz.watch, S = wizState(), e = S.z[w.z], it = itemById(w.id);
+    wiz.watch = null;
+    if (e && it && e.id === it.id) {
+      if (it.tf && (w.ok || e.st === 'fail')) { e.st = w.ok ? 'ok' : 'mid'; wiz.msg[w.z] = w.ok ? 'Calée ✓' : 'Placée : vérifie-la si besoin.'; }
+      wizSave();
+    }
+    syncLayers(); renderList();
+    if (wiz.open) { wiz.el.hidden = false; document.body.classList.add('mbw-open'); wizCta(); wizRender(); }
+  }
+  // proposé une fois à l'ouverture, s'il n'y a encore aucune capture
+  function wizOffer() {
+    if (items.length || X.store.get('mbwOffer', false) || (navigator.webdriver && !window.__MBW_OFFER)) return;
+    var tries = 0;
+    var go = function () {
+      if (items.length || X.store.get('mbwOffer', false)) return;
+      var busy = !document.body.classList.contains('ready') || cal || adj || wiz.open || !$('busy').hidden || (document.querySelector('.modal:not([hidden])'));
+      if (busy) { if (++tries < 40) setTimeout(go, 500); return; }
+      wizCss();
+      var d = document.createElement('div');
+      d.id = 'mbwOffer'; d.className = 'mbw-offer'; d.setAttribute('role', 'dialog'); d.setAttribute('aria-modal', 'true'); d.setAttribute('aria-labelledby', 'mbwOfferT');
+      d.innerHTML = '<div class="mbw-ob"><h2 id="mbwOfferT">Voir la vraie carte du jeu ?</h2><p>Avec <b>6 photos</b> de la carte du jeu (captures ou photos de ta télé), l\'app affiche la vraie carte sous tes points. L\'assistant te guide zone par zone ; tout reste sur ton téléphone.</p>' +
+        '<div class="rowbtns"><button type="button" class="btn" id="mbwLater">Plus tard</button><button type="button" class="btn primary" id="mbwStart">Commencer</button></div></div>';
+      document.body.appendChild(d);
+      X.store.set('mbwOffer', true);
+      $('mbwLater').addEventListener('click', function () { d.remove(); X.toast('L\'assistant reste dans le menu, rubrique « Mon fond de carte ».'); });
+      $('mbwStart').addEventListener('click', function () { d.remove(); wizOpen(); });
+    };
+    setTimeout(go, 900);
+  }
+
+  /* ---------- « Où est-ce sur ma photo ? » ----------
+     L'utilisateur photographie (ou capture) la carte du jeu centrée sur la zone d'un point ; l'app cale la photo autour de ce
+     point (redressement, noms lus, icônes du jeu, voisinage, côtes) et montre SA photo avec un repère clignotant à l'endroit
+     exact du point. Si l'app n'est pas sûre : mode guidé (toucher 2 icônes du jeu sur la photo). */
+  var loc = null, locMap = null, locLayers = null, mById = null;
+  function markerById(id) {
+    if (!mById) { mById = {}; X.markers.forEach(function (m) { mById[m.id] = m; }); }
+    return mById[id] || null;
+  }
+  function ingameCat(c) { var A = window.GTA6_APP; try { return !!(A && A.inGame && A.inGame(c)); } catch (e) { return false; } }
+  // icônes permanentes de la carte du jeu (magasins, services) : affichées par défaut et bien placées dans les données.
+  // Les catégories très nombreuses (distributeurs, cascades, véhicules, objets à ramasser…) brouilleraient l'appariement.
+  var ICON_CATS = ['ammu-nation-standard', 'ammu-nation-high-end', 'ammu-nation-hunting', 'ammu-nation-pawn', 'casual-street', 'sportswear', 'formal',
+    'souvenir-swimwear', 'thrift', 'footwear', 'haircut', 'tattoo', 'electronics', 'gym', 'pay-n-spray', 'vehicle-mod-shop', 'car-wash', 'gas-station',
+    'bank', 'big-bank', 'payday-loan', 'nightclub', 'convenience-store', 'liquor-store', 'bar', 'cafe-takeout', 'food-and-drink', 'garage', 'safehouse',
+    'impound', 'golf', 'shooting-range', 'fence', 'train-station'];
+  function iconsAround(x, y, R) {
+    var pick = function (all) {
+      var K = [], seen = [];
+      X.markers.forEach(function (m) {
+        if (Math.abs(m.x - x) > R || Math.abs(m.y - y) > R || !ingameCat(m.c) || (!all && ICON_CATS.indexOf(m.c) < 0)) return;
+        for (var i = 0; i < seen.length; i += 2) if (Math.abs(seen[i] - m.x) < 25 && Math.abs(seen[i + 1] - m.y) < 25) return;
+        seen.push(m.x, m.y); K.push(m.x, m.y);
+      });
+      return K;
+    };
+    var K = pick(false);
+    return K.length >= 16 ? K : pick(true); // campagne : peu de magasins, on prend toutes les icônes visibles en jeu
+  }
+  var DIRS = ['est', 'nord-est', 'nord', 'nord-ouest', 'ouest', 'sud-ouest', 'sud', 'sud-est'];
+  function dirName(dx, dy) { var a = Math.atan2(dy, dx); return DIRS[((Math.round(a / (Math.PI / 4)) % 8) + 8) % 8]; }
+  function rnd10(d) { return d < 100 ? Math.round(d / 10) * 10 : Math.round(d / 50) * 50; }
+  // 2 icônes du jeu pour le mode guidé : les repères « r » du point, sinon les icônes visibles en jeu les plus proches
+  function locRefs(m) {
+    var out = [];
+    // repères « r » du point : résolus par app.js (m.refs : { m, x, y, label }) ou bruts (m.r0 / m.r : { id, label })
+    (Array.isArray(m.refs) ? m.refs.map(function (r) { return { id: r.m && r.m.id, label: r.label, t: r.m || null }; }) : (m.r0 || m.r || [])).forEach(function (r) {
+      var t = r && (r.t || markerById(r.id));
+      if (t && out.length < 2 && !out.some(function (o) { return Math.hypot(o.x - t.x, o.y - t.y) < 60; })) {
+        out.push({ x: t.x, y: t.y, n: (r.label || ('icône ' + (X.cats[t.c] ? X.cats[t.c].n : ''))).replace(/^icône /, ''), dir: dirName(m.x - t.x, m.y - t.y), dist: rnd10(Math.hypot(m.x - t.x, m.y - t.y)) });
+      }
+    });
+    if (out.length < 2) {
+      var C = X.markers.filter(function (t) { return t !== m && ingameCat(t.c) && Math.hypot(t.x - m.x, t.y - m.y) < 1500; });
+      C.sort(function (p, q) { return Math.hypot(p.x - m.x, p.y - m.y) - Math.hypot(q.x - m.x, q.y - m.y); });
+      for (var i = 0; i < C.length && out.length < 2; i++) {
+        var t = C[i];
+        if (out.some(function (o) { return Math.hypot(o.x - t.x, o.y - t.y) < 150; })) continue;
+        out.push({ x: t.x, y: t.y, n: (X.cats[t.c] ? X.cats[t.c].n : 'icône') + ' (« ' + t.n + ' »)', dir: dirName(m.x - t.x, m.y - t.y), dist: rnd10(Math.hypot(m.x - t.x, m.y - t.y)) });
+      }
+    }
+    return out;
+  }
+  function locCss() {
+    if (document.getElementById('mblStyle')) return;
+    var st = document.createElement('style'); st.id = 'mblStyle';
+    st.textContent = [
+      '.mbl{position:absolute;inset:0;z-index:2420;display:flex;flex-direction:column;background:#03050f;color:var(--text,#eef3ff)}',
+      'body.mbl-open #toast{z-index:2450}',
+      '.mbl-top{display:flex;align-items:center;gap:10px;padding:calc(8px + var(--sat,0px)) 10px 8px 14px;background:var(--bg,#070b1f);border-bottom:1px solid rgba(255,46,151,.45)}',
+      '.mbl-top div{flex:1;min-width:0}.mbl-top b{display:block;font-size:18px;line-height:1.15;color:var(--cyan,#22e6ff);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.mbl-top small{display:block;color:var(--muted,#a3acd6);font-size:13px;font-weight:600}',
+      '.mbl-map{flex:1;min-height:0;background:#03050f}',
+      '.mbl-card{padding:10px 12px calc(12px + var(--sab,0px));background:var(--panel,rgba(11,15,40,.96));border-top:1px solid rgba(34,230,255,.5)}',
+      '.mbl-card p{margin:0 2px 8px;font-size:15px;line-height:1.4}.mbl-card p b{color:var(--cyan,#22e6ff)}.mbl-card p.ok b.q{color:var(--ok,#4dffa6)}.mbl-card p.mid b.q{color:#ffe14d}',
+      '.mbl-card .rowbtns{display:flex;gap:8px;flex-wrap:wrap}.mbl-card .btn{flex:1 1 140px;min-height:48px}',
+      '@media (min-width:900px){.mbl-card{display:flex;align-items:center;gap:12px}.mbl-card p{flex:1;margin:0}}',
+      '.mbl-pt{pointer-events:none}.mbl-pt i{position:absolute;left:50%;top:50%;width:22px;height:22px;margin:-11px 0 0 -11px;border-radius:50%;background:var(--pink,#ff2e97);border:3px solid #fff;box-shadow:0 0 0 2px #000,0 0 16px var(--pink,#ff2e97);animation:mblBlink 1s steps(2,start) infinite}',
+      '.mbl-pt b{position:absolute;left:50%;top:50%;width:64px;height:64px;margin:-32px 0 0 -32px;border-radius:50%;border:4px solid var(--pink,#ff2e97);box-shadow:0 0 0 2px rgba(0,0,0,.6);animation:mblPulse 1.3s ease-out infinite}',
+      '.mbl-pt span{position:absolute;left:50%;top:50%;width:2px;height:100px;margin:-50px 0 0 -1px;background:rgba(255,255,255,.9);box-shadow:0 0 0 1px #000}.mbl-pt span+span{width:100px;height:2px;margin:-1px 0 0 -50px}',
+      '@keyframes mblBlink{to{visibility:hidden}}@keyframes mblPulse{0%{transform:scale(.4);opacity:1}100%{transform:scale(1.4);opacity:0}}',
+      '.mbl-tap{pointer-events:none}.mbl-tap span{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:var(--cyan,#22e6ff);color:#04122a;font-weight:800;border:2px solid #fff;box-shadow:0 0 0 2px #000}'
+    ].join('\n');
+    document.head.appendChild(st);
+  }
+  function locBuild() {
+    if ($('mbl')) return;
+    locCss();
+    var el = document.createElement('div');
+    el.id = 'mbl'; el.className = 'mbl'; el.hidden = true; el.setAttribute('role', 'dialog'); el.setAttribute('aria-modal', 'true'); el.setAttribute('aria-labelledby', 'mblT');
+    el.innerHTML = '<div class="mbl-top"><div><b id="mblT"></b><small id="mblSub">sur ta photo</small></div>' +
+      '<button id="mblX" class="iconbtn" type="button" aria-label="Fermer">' + ICONS.use('ui_close') + '</button></div>' +
+      '<div class="mbl-map" id="mblMap"></div><div class="mbl-card" id="mblCard"></div>';
+    var f = document.createElement('input');
+    f.type = 'file'; f.accept = 'image/*'; f.id = 'mblFile'; f.className = 'vh'; f.tabIndex = -1; f.setAttribute('aria-hidden', 'true');
+    el.appendChild(f);
+    document.body.appendChild(el);
+    $('mblX').addEventListener('click', locClose);
+    f.addEventListener('change', function () { var m = loc && loc.m, fl = this.files && this.files[0]; if (m && fl) locRun(m, fl); });
+    L.DomEvent.disableClickPropagation($('mblCard'));
+  }
+  // point d'entrée : fiche d'un point -> « Trouver ce point sur ma photo »
+  function locateOnPhoto(m) {
+    if (!X || !m || typeof m.x !== 'number' || typeof m.y !== 'number') return;
+    locBuild();
+    if (loc && loc.it && !loc.kept) quietRemove(loc.it);
+    loc = { m: m, it: null };
+    var f = $('mblFile'); f.value = ''; f.click();
+  }
+  function locRun(m, file) {
+    var lab = '« ' + m.n + ' »';
+    X.closeSheet();
+    busyShow(lab + ' : préparation de ta photo…'); busyProg(0);
+    importFile(file).then(function (o) {
+      var it = o.it; it.tmp = true; it.name = 'Photo : ' + m.n; loc.it = it;
+      if (o.pre) return { conf: 'good', tf: copyT(it.tf), r: { method: 'preset' }, sig: 60 };
+      it.tf = null;
+      var pg = function (p) { busyProg(p); };
+      pg.msg = function (m2) { busyShow(lab + ' : ' + (/^Calage automatique : /.test(m2) ? m2.replace(/^Calage automatique : /, '') : 'recherche sur ta photo…')); };
+      busyShow(lab + ' : recherche sur ta photo…');
+      return autoCalibrate(it, pg, { zone: { id: 'loc', n: m.n, x: m.x, y: m.y, w: 4000, h: 2250 }, icons: { K: iconsAround(m.x, m.y, 3000), near: { x: m.x, y: m.y } } });
+    }).then(function (a) {
+      busyShow(''); busyProg(null);
+      var it = loc.it;
+      lastAuto = autoInfo(it, a); autoLog.push(lastAuto);
+      var tf = a.tf && a.conf !== 'bad' ? a.tf : null, pt = null;
+      if (tf) {
+        pt = invPt(tf, m.x, m.y);
+        if (!(pt[0] > -0.02 * it.w && pt[0] < 1.02 * it.w && pt[1] > -0.02 * it.h && pt[1] < 1.02 * it.h)) { tf = null; pt = null; } // le point doit être sur la photo
+      }
+      var r = a.r || {}, s = tf ? scaleOf(tf) : 0;
+      loc.tf = tf; loc.conf = tf ? a.conf : 'bad'; loc.method = r.method || ''; loc.pt = pt;
+      loc.sig = tf ? (a.sig || (r.method === 'voisin' ? 4 * s : r.method && r.method.indexOf('noms') === 0 ? 60 : 0.006 * s * it.w)) : 0;
+      loc.refs = locRefs(m); loc.taps = []; loc.step = -1;
+      locShow();
+      if (!tf) locGuide();
+    }).catch(function () {
+      busyShow(''); busyProg(null);
+      X.toast('Impossible de lire cette photo. Essaie une capture en JPEG ou PNG.');
+      if (loc && loc.it) quietRemove(loc.it);
+      loc = null; renderList();
+    });
+  }
+  function invPt(t, x, y) { var det = t.a * t.e - t.b * t.d, X2 = x - t.c, Y2 = y - t.f; return [(t.e * X2 - t.b * Y2) / det, (-t.d * X2 + t.a * Y2) / det]; }
+  function locShow() {
+    var it = loc.it, el = $('mbl');
+    el.hidden = false; document.body.classList.add('mbl-open');
+    $('mblT').textContent = loc.m.n;
+    if (!locMap) {
+      locMap = L.map('mblMap', { crs: L.CRS.Simple, zoomControl: false, attributionControl: false, zoomSnap: 0.25, zoomDelta: 0.5, minZoom: -6, maxZoom: 3, bounceAtZoomLimits: false, tapTolerance: 12 });
+      locMap.on('click', function (e) { locTap(e.latlng.lng, -e.latlng.lat); });
+    }
+    if (locLayers) locLayers.remove();
+    locLayers = L.layerGroup().addTo(locMap);
+    L.imageOverlay(it.url, [[-it.h, 0], [0, it.w]]).addTo(locLayers);
+    locMap.invalidateSize();
+    locMap.setMinZoom(-6);
+    locMap.fitBounds([[-it.h, 0], [0, it.w]], { animate: false, padding: [4, 4] });
+    var z0 = locMap.getZoom();
+    locMap.setMinZoom(z0 - 1);
+    // zoom sur le point (la photo est souvent en paysage sur un téléphone en portrait)
+    if (loc.pt) locMap.setView([-loc.pt[1], loc.pt[0]], z0 + (X.isWide() ? 0.75 : 1.5), { animate: false });
+    locDraw();
+  }
+  function locDraw() {
+    if (!loc || !locMap) return;
+    if (loc.marks) loc.marks.remove();
+    loc.marks = L.layerGroup().addTo(locLayers);
+    var it = loc.it, tf = loc.tf, m = loc.m;
+    if (tf && loc.pt) {
+      var s = scaleOf(tf);
+      // les autres points proches (petits)
+      var near = X.markers.filter(function (o) { return o !== m && Math.abs(o.x - m.x) < s * it.w && Math.abs(o.y - m.y) < s * it.h; }).map(function (o) {
+        var q = invPt(tf, o.x, o.y); return { o: o, u: q[0], v: q[1], d: Math.hypot(q[0] - loc.pt[0], q[1] - loc.pt[1]) };
+      }).filter(function (q) { return q.u >= 0 && q.u <= it.w && q.v >= 0 && q.v <= it.h; });
+      near.sort(function (p, q) { return p.d - q.d; });
+      var drawn = [], minD = 0.012 * Math.max(it.w, it.h);
+      near.forEach(function (q) {
+        if (drawn.length >= 12 || q.d < 2 * minD || drawn.some(function (p) { return Math.hypot(p.u - q.u, p.v - q.v) < minD; })) return;
+        drawn.push(q);
+        var c = X.cats[q.o.c];
+        L.circleMarker([-q.v, q.u], { radius: 4, weight: 1, color: '#fff', fillColor: c ? c.color : '#ccc', fillOpacity: 0.85, opacity: 0.9, interactive: true })
+          .bindTooltip(X.esc(q.o.n), { direction: 'top' }).addTo(loc.marks);
+      });
+      L.circle([-loc.pt[1], loc.pt[0]], { radius: Math.max(6, loc.sig / s), color: '#ff2e97', weight: 2, dashArray: '6 5', fillColor: '#ff2e97', fillOpacity: 0.12, interactive: false }).addTo(loc.marks);
+      L.marker([-loc.pt[1], loc.pt[0]], { interactive: false, keyboard: false, zIndexOffset: 1000,
+        icon: L.divIcon({ className: 'mbl-pt', iconSize: [0, 0], html: '<span></span><span></span><b></b><i></i>' }) }).addTo(loc.marks);
+    }
+    loc.taps.forEach(function (p, i) {
+      L.marker([-p.v, p.u], { interactive: false, icon: L.divIcon({ className: 'mbl-tap', iconSize: [30, 30], html: '<span>' + (i + 1) + '</span>' }) }).addTo(loc.marks);
+    });
+    locCard();
+  }
+  var METHOD_TXT = { icones: 'aux icônes du jeu', noms: 'aux noms lus', 'noms+cotes': 'aux noms lus et aux côtes', voisin: 'à tes autres captures', cotes: 'aux côtes', preset: 'à la carte entière', main: 'à tes 2 icônes' };
+  function locCard() {
+    var c = $('mblCard'), h = '', s = loc.tf ? scaleOf(loc.tf) : 0;
+    if (loc.step >= 0) {
+      var r = loc.refs[loc.step];
+      h = '<p>Étape ' + (loc.step + 1) + ' sur 2 : touche sur ta photo <b>l\'icône ' + X.esc(r.n) + '</b>' + (r.dist ? ' (le point est à ~' + r.dist + ' m ' + (/^[aeiou]/.test(r.dir) ? 'à l\'' : 'au ') + r.dir + ' de cette icône)' : '') +
+        '. Zoome avec deux doigts si besoin.</p><div class="rowbtns"><button type="button" class="btn" id="mblCancel">' + ICONS.use('ui_undo') + 'Annuler</button></div>';
+    } else if (loc.tf) {
+      var acc = Math.max(5, Math.round(loc.sig / 5) * 5);
+      h = '<p class="' + (loc.conf === 'good' || loc.conf === 'main' ? 'ok' : 'mid') + '">' + (loc.conf === 'good' || loc.conf === 'main' ?
+        '<b class="q">Le point est ici ✓</b> (repère rose qui clignote, précision ~' + acc + ' m), trouvé grâce ' + (METHOD_TXT[loc.method] || 'à ta photo') + '.' :
+        '<b class="q">Position probable</b> (à ~' + acc + ' m près) : vérifie que les petits points tombent sur les icônes du jeu. Sinon, montre 2 icônes.') + '</p>' +
+        '<div class="rowbtns">' + (loc.refs.length >= 2 ? '<button type="button" class="btn" id="mblGuide">' + ICONS.use('ui_center') + 'Montrer 2 icônes</button>' : '') +
+        (loc.kept ? '<button type="button" class="btn" disabled>' + ICONS.use('ui_check') + 'Gardée comme fond</button>' :
+          '<button type="button" class="btn primary" id="mblKeep">' + ICONS.use('ui_image') + 'Garder comme fond de carte</button>') + '</div>';
+    } else {
+      h = '<p>L\'app n\'a pas trouvé ce point sur ta photo' + (loc.refs.length >= 2 ? '.' : ' et il n\'y a pas d\'icône du jeu connue à côté. Reprends une photo plus zoomée, centrée sur le point.') + '</p>' +
+        '<div class="rowbtns">' + (loc.refs.length >= 2 ? '<button type="button" class="btn primary" id="mblGuide">' + ICONS.use('ui_center') + 'Montrer 2 icônes</button>' : '') +
+        '<button type="button" class="btn" id="mblClose2">' + ICONS.use('ui_close') + 'Fermer</button></div>';
+    }
+    c.innerHTML = h;
+    var on = function (id, fn) { var e = $(id); if (e) e.addEventListener('click', fn); };
+    on('mblGuide', locGuide); on('mblCancel', function () { loc.step = -1; loc.taps = []; locDraw(); }); on('mblKeep', locKeep); on('mblClose2', locClose);
+  }
+  function locGuide() {
+    if (!loc || loc.refs.length < 2) { locCard(); return; }
+    loc.step = 0; loc.taps = []; locDraw();
+  }
+  function locTap(u, v) {
+    if (!loc || loc.step < 0) return;
+    var it = loc.it;
+    if (u < 0 || v < 0 || u > it.w || v > it.h) return;
+    if (loc.step === 1 && Math.hypot(u - loc.taps[0].u, v - loc.taps[0].v) < 0.02 * Math.max(it.w, it.h)) { X.toast('Trop près de la première icône : touche l\'autre icône.'); return; }
+    var r = loc.refs[loc.step];
+    loc.taps.push({ u: u, v: v, x: r.x, y: r.y, n: r.n });
+    if (loc.step === 0) { loc.step = 1; locDraw(); return; }
+    var t = fitSim(loc.taps);
+    loc.step = -1;
+    if (!t || !(scaleOf(t) > 0.05 && scaleOf(t) < 60)) { loc.taps = []; X.toast('Ces 2 icônes ne collent pas : recommence.'); locDraw(); return; }
+    t.kind = 'sim';
+    loc.tf = t; loc.conf = 'main'; loc.method = 'main'; loc.pt = invPt(t, loc.m.x, loc.m.y);
+    loc.sig = Math.max(10, 0.3 * ICON_H * it.h * scaleOf(t)); // précision d'un toucher (~1/3 d'icône)
+    loc.taps = [];
+    locDraw();
+    var pt = loc.pt;
+    if (pt[0] >= 0 && pt[0] <= it.w && pt[1] >= 0 && pt[1] <= it.h) locMap.panTo([-pt[1], pt[0]]);
+    else X.toast('Le point est en dehors de ta photo : reprends une photo centrée sur cette zone.');
+  }
+  function locKeep() {
+    if (!loc || !loc.tf || loc.kept) return;
+    var it = loc.it;
+    it.tf = copyT(loc.tf); it.pts = []; it.show = true; it.tmp = false; it.name = 'Photo : ' + loc.m.n;
+    loc.kept = true;
+    saveMeta(it); syncLayers(); renderList();
+    X.toast('Photo ajoutée à « Mon fond de carte » ✓');
+    locCard();
+  }
+  function locClose() {
+    if (!loc) return;
+    if (loc.it && !loc.kept) quietRemove(loc.it);
+    loc = null;
+    var el = $('mbl'); if (el) el.hidden = true;
+    document.body.classList.remove('mbl-open');
+    renderList();
+  }
+
   /* ---------- Démarrage ---------- */
   function bindUI() {
     $('mybgImport').addEventListener('click', function () { if (!X.store.get('mybgTuto', false)) tutoOpen(); else pickFile(); });
@@ -2359,6 +3389,8 @@
     bindAdjPointers();
     document.addEventListener('keydown', function (e) {
       if (e.key !== 'Escape') return;
+      if (loc && $('mbl') && !$('mbl').hidden && $('busy').hidden) { if (loc.step >= 0) { loc.step = -1; loc.taps = []; locDraw(); } else locClose(); return; }
+      if (wiz.open && !cal && !adj && wiz.el && !wiz.el.hidden && $('busy').hidden) { wizClose(); return; }
       if (!$('tuto').hidden) tutoClose();
       else if (cal) calCancel();
       else if (adj) adjClose(adj.check);
@@ -2374,6 +3406,7 @@
     for (var i = 0; i < els.length; i++) if (!els[i].firstChild) els[i].innerHTML = ICONS.use(els[i].getAttribute('data-ic'));
     bindUI();
     renderList();
+    wizCta();
     idbOpen().then(function (d) {
       db = d;
       if (!db) { memOnly = true; showNote(); return []; }
@@ -2388,13 +3421,18 @@
     }).then(function (arr) {
       arr.filter(Boolean).forEach(function (it) { if (!items.some(function (x) { return x.id === it.id; })) items.push(it); });
       items.sort(function (p, q) { return p.created - q.created; });
+      wiz.loaded = true;
       syncLayers(); renderList();
-    }).catch(function () { /* la carte reste utilisable */ });
+      wizOffer();
+    }).catch(function () { wiz.loaded = true; wizCta(); /* la carte reste utilisable */ });
   }
 
   window.GTA6_MYBG = {
     init: init,
-    busy: function () { return !!(cal || adj); },
+    busy: function () { return !!(cal || adj || wiz.open || (loc && $('mbl') && !$('mbl').hidden)); },
+    // fiche d'un point : « Trouver ce point sur ma photo » (à appeler depuis un clic : ouvre le sélecteur de photo)
+    locateOnPhoto: function (m) { locateOnPhoto(m); },
+    openWizard: function () { wizOpen(); },
     setAuto: function (on) { if (X) X.store.set('mybgAuto', !!on); },
     setOcr: function (on) { if (X) X.store.set('mybgOcr', !!on); }, // lecture des noms de lieux (activée par défaut)
     // pour les tests automatisés
@@ -2406,6 +3444,18 @@
     // tests : calage automatique d'une image (URL) sans interface ; suppression d'une capture
     _autoTest: function (url, w, h) { return autoCalibrate({ url: url, w: w, h: h }).then(function (o) { return { conf: o.conf, tf: o.tf, r: o.r }; }); },
     _ocr: function (url) { return ocrCalibrate({ url: url }, function () { /* */ }); },
+    _wiz: function () { if (!REP.length) resolveReperes(); return { open: wiz.open, state: JSON.parse(JSON.stringify(wizState())), done: wizDone(), zones: ZONES.map(function (z) { return { id: z.id, n: z.n, x: z.x, y: z.y, w: z.w, h: z.h, rep: (z.rep || []).map(function (r) { return r.n; }) }; }), watch: wiz.watch }; },
+    _nbTest: function (url, w, h, ids, zoneId) {
+      var it = { id: 'test', url: url, w: w, h: h };
+      var keep = items; items = items.filter(function (x) { return !ids || ids.indexOf(x.id) >= 0; }).concat([it]);
+      var p = nbCalibrate(it, zoneId ? zoneById(zoneId) : null);
+      items = keep;
+      return p;
+    },
+    _loc: function () { return loc && { m: { id: loc.m.id, n: loc.m.n, x: loc.m.x, y: loc.m.y }, itemId: loc.it && loc.it.id, w: loc.it && loc.it.w, h: loc.it && loc.it.h,
+      tf: copyT(loc.tf), conf: loc.conf, method: loc.method, pt: loc.pt, sig: loc.sig, step: loc.step, refs: loc.refs, kept: !!loc.kept, open: !!($('mbl') && !$('mbl').hidden) }; },
+    // tests : position écran (dans la page) d'un pixel de la photo affichée
+    _locScreen: function (u, v) { var p = locMap.latLngToContainerPoint([-v, u]), r = locMap.getContainer().getBoundingClientRect(); return [r.left + p.x, r.top + p.y]; },
     _remove: function (id) { var it = items.filter(function (x) { return x.id === id; })[0]; if (it) removeItem(it); }
   };
 })();
