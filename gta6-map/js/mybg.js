@@ -862,6 +862,115 @@
       return { px: out, w: ow, h: oh };
     }
 
+    // redressement seul (avant la lecture des noms) : géométrie de l'écran, ou null si ce n'est pas une photo d'écran
+    function prep(px, w, h) {
+      var S = detectScreen(px, w, h), G = S ? screenGeom(S, 360) : null;
+      if (!(G && G.u1 - G.u0 > 100)) return null;
+      return { H: G.H, SW: G.SW, SH: G.SH, u0: G.u0, u1: G.u1, hs: S.hs, pw: w, ph: h };
+    }
+
+    /* -- Lignes de texte (noms de lieux) : les lettres des cartes du jeu sont des traits clairs et fins cernés de sombre.
+       Chapeau haut-de-forme morphologique (luminance - ouverture), composantes connexes de la taille d'une lettre,
+       regroupées en lignes (même hauteur, alignées, rapprochées). Renvoie les boîtes et le masque des lettres de chaque ligne. -- */
+    function mmFilter(src, W, H, r, mx) {
+      var t = new Float32Array(W * H), o = new Float32Array(W * H), x, y, k, v, q, a, b, row;
+      for (y = 0; y < H; y++) {
+        row = y * W;
+        for (x = 0; x < W; x++) {
+          v = src[row + x]; a = x - r < 0 ? 0 : x - r; b = x + r >= W ? W - 1 : x + r;
+          for (k = a; k <= b; k++) { q = src[row + k]; if (mx ? q > v : q < v) v = q; }
+          t[row + x] = v;
+        }
+      }
+      for (y = 0; y < H; y++) {
+        a = y - r < 0 ? 0 : y - r; b = y + r >= H ? H - 1 : y + r; row = y * W;
+        for (x = 0; x < W; x++) {
+          v = t[row + x];
+          for (k = a; k <= b; k++) { q = t[k * W + x]; if (mx ? q > v : q < v) v = q; }
+          o[row + x] = v;
+        }
+      }
+      return o;
+    }
+    function textLines(px, w, h) {
+      var N = w * h, Lm = new Float32Array(N), i, out = [], acc, hist;
+      for (i = 0; i < N; i++) Lm[i] = 0.3 * px[4 * i] + 0.59 * px[4 * i + 1] + 0.11 * px[4 * i + 2];
+      // 3 passes : traits clairs fins (2 tailles de lettres), puis lettres blanches (les plus claires de l'image, peu colorées)
+      [[4, 7, 42], [7, 14, 76], [0, 8, 76]].forEach(function (P) {
+        var r = P[0], hmin = P[1], hmax = P[2], m = new Uint8Array(N), lab = new Int32Array(N), st = new Int32Array(N), T;
+        if (r) {
+          var op = mmFilter(mmFilter(Lm, w, h, r, false), w, h, r, true);
+          // seuil : 28 niveaux au-dessus du fond local (moins si la photo est terne)
+          hist = new Uint32Array(256);
+          for (i = 0; i < N; i++) { var d = Lm[i] - op[i]; if (d > 4) hist[Math.min(255, d | 0)]++; }
+          acc = 0; var p995 = 255; for (i = 255; i >= 0; i--) { acc += hist[i]; if (acc > 0.005 * N) { p995 = i; break; } }
+          T = Math.max(14, Math.min(28, 0.45 * p995));
+          for (i = 0; i < N; i++) m[i] = Lm[i] - op[i] > T ? 1 : 0;
+        } else {
+          var mn = new Uint8Array(N), sat = new Uint8Array(N);
+          hist = new Uint32Array(256);
+          for (i = 0; i < N; i++) {
+            var R = px[4 * i], G = px[4 * i + 1], B = px[4 * i + 2], lo = Math.min(R, G, B);
+            mn[i] = lo; sat[i] = Math.max(R, G, B) - lo; hist[lo]++;
+          }
+          acc = 0; var q995 = 255; for (i = 255; i >= 0; i--) { acc += hist[i]; if (acc > 0.005 * N) { q995 = i; break; } }
+          T = Math.max(150, q995 - 25);
+          for (i = 0; i < N; i++) m[i] = mn[i] > T && sat[i] < 60 ? 1 : 0;
+        }
+        var comps = [], cur = 0;
+        for (i = 0; i < N; i++) {
+          if (!m[i] || lab[i]) continue;
+          cur++; var sp = 0, cnt = 0, x0 = w, y0 = h, x1 = -1, y1 = -1; st[sp++] = i; lab[i] = cur;
+          while (sp) {
+            var p = st[--sp], x = p % w, y = (p / w) | 0; cnt++;
+            if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+            if (x > 0 && m[p - 1] && !lab[p - 1]) { lab[p - 1] = cur; st[sp++] = p - 1; }
+            if (x < w - 1 && m[p + 1] && !lab[p + 1]) { lab[p + 1] = cur; st[sp++] = p + 1; }
+            if (y > 0 && m[p - w] && !lab[p - w]) { lab[p - w] = cur; st[sp++] = p - w; }
+            if (y < h - 1 && m[p + w] && !lab[p + w]) { lab[p + w] = cur; st[sp++] = p + w; }
+          }
+          var bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+          if (bh < hmin || bh > hmax || bw > Math.max(hmax * 1.4, 1.2 * bh) || cnt < 0.12 * bw * bh) continue;
+          comps.push({ x0: x0, y0: y0, x1: x1 + 1, y1: y1 + 1, id: cur });
+        }
+        comps.sort(function (p2, q2) { return p2.x0 - q2.x0; });
+        var n = comps.length, par = new Int32Array(n), j;
+        for (i = 0; i < n; i++) par[i] = i;
+        var root = function (k2) { while (par[k2] !== k2) { par[k2] = par[par[k2]]; k2 = par[k2]; } return k2; };
+        for (i = 0; i < n; i++) {
+          var A = comps[i], ha = A.y1 - A.y0;
+          for (j = i + 1; j < n; j++) {
+            var B = comps[j], hb = B.y1 - B.y0, mxh = Math.max(ha, hb), mnh = Math.min(ha, hb);
+            if (B.x0 - A.x1 > 1.2 * mxh) { if (B.x0 > A.x1 + 2.5 * hmax) break; continue; }
+            if (mxh > 1.8 * mnh) continue;
+            var ov = Math.min(A.y1, B.y1) - Math.max(A.y0, B.y0);
+            if (ov < 0.5 * mnh) continue;
+            if (B.x0 - A.x1 < -0.5 * mnh && ov < 0.8 * mnh) continue;
+            par[root(i)] = root(j);
+          }
+        }
+        var groups = {};
+        for (i = 0; i < n; i++) { var g = root(i); (groups[g] = groups[g] || []).push(comps[i]); }
+        Object.keys(groups).forEach(function (g) {
+          var C = groups[g];
+          if (C.length < 3) return;
+          var lx0 = w, ly0 = h, lx1 = 0, ly1 = 0, ids = {};
+          C.forEach(function (c) { lx0 = Math.min(lx0, c.x0); ly0 = Math.min(ly0, c.y0); lx1 = Math.max(lx1, c.x1); ly1 = Math.max(ly1, c.y1); ids[c.id] = 1; });
+          if (lx1 - lx0 < 1.5 * (ly1 - ly0)) return;
+          // déjà trouvée à l'autre échelle ?
+          for (var q3 = 0; q3 < out.length; q3++) {
+            var o3 = out[q3], iw = Math.min(o3.x1, lx1) - Math.max(o3.x0, lx0), ih = Math.min(o3.y1, ly1) - Math.max(o3.y0, ly0);
+            if (iw > 0 && ih > 0 && iw * ih > 0.85 * Math.max((o3.x1 - o3.x0) * (o3.y1 - o3.y0), (lx1 - lx0) * (ly1 - ly0))) return;
+          }
+          var bwl = lx1 - lx0, bhl = ly1 - ly0, bits = new Uint8Array(bwl * bhl);
+          for (var yy = 0; yy < bhl; yy++) for (var xx = 0; xx < bwl; xx++) if (ids[lab[(ly0 + yy) * w + lx0 + xx]]) bits[yy * bwl + xx] = 1;
+          out.push({ x0: lx0, y0: ly0, x1: lx1, y1: ly1, n: C.length, bits: bits });
+        });
+      });
+      out.sort(function (p2, q2) { return q2.n - p2.n; });
+      return out.slice(0, 110);
+    }
+
     /* -- Nelder-Mead -- */
     function nelder(f, x0, step, maxIt) {
       var n = x0.length, P = [x0.slice()], F = [f(x0)], i, j;
@@ -904,6 +1013,57 @@
       var info = { segMs: Date.now() - t0, land: seg.nl, water: seg.nw, clusters: seg.clusters, rows: seg.rows, cols: seg.cols };
       var nk = seg.nl + seg.nw;
       if (nk < 0.06 * N || Math.min(seg.nl, seg.nw) < 0.02 * nk) return { ok: false, why: 'seg', rect: rect, info: info, ms: Date.now() - t0 };
+      var uc = w / 2, vc = h / 2;
+      // échantillons pour le raffinement : bords terre/eau (tous) + intérieur (sous-échantillonné)
+      var ns = 0, SU, SV, SL, SW;
+      function buildSamples() {
+        var edge = [], inner = [], ii, jj;
+        for (jj = 0; jj < h; jj++) for (ii = 0; ii < w; ii++) {
+          var lv2 = lab[jj * w + ii]; if (!lv2) continue;
+          var isE = false;
+          for (var dy2 = -2; dy2 <= 2 && !isE; dy2++) { var y2 = jj + dy2; if (y2 < 0 || y2 >= h) continue;
+            for (var dx2 = -2; dx2 <= 2; dx2++) { var x2 = ii + dx2; if (x2 < 0 || x2 >= w) continue; if (lab[y2 * w + x2] === -lv2) { isE = true; break; } } }
+          (isE ? edge : inner).push(jj * w + ii);
+        }
+        var smp = [], stE = Math.max(1, Math.ceil(edge.length / 9000)), stI = Math.max(1, Math.ceil(inner.length / 4000));
+        for (ii = 0; ii < edge.length; ii += stE) smp.push(edge[ii]);
+        for (ii = 0; ii < inner.length; ii += stI) smp.push(inner[ii]);
+        ns = smp.length; SU = new Float64Array(ns); SV = new Float64Array(ns); SL = new Float64Array(ns); SW = new Float64Array(ns);
+        var nE = Math.ceil(edge.length / stE);
+        for (ii = 0; ii < ns; ii++) { var pp = smp[ii]; SU[ii] = (pp % w) + 0.5 - uc; SV[ii] = ((pp / w) | 0) + 0.5 - vc; SL[ii] = lab[pp]; SW[ii] = ii < nE ? stE : stI; }
+      }
+      // calage déjà connu (lecture des noms) : simple raffinement local, dans une fenêtre (échelle ± ds, translation ± dt unités)
+      if (inp.win) {
+        buildSamples();
+        var Wn = inp.win, T0 = { X: Wn.a * uc + Wn.b * vc + Wn.c, Y: Wn.d * uc + Wn.e * vc + Wn.f, a: Wn.a, b: Wn.b, d: Wn.d, e: Wn.e };
+        var s0w = Math.sqrt(Math.abs(Wn.a * Wn.e - Wn.b * Wn.d)), dt = Wn.dt || 300, lds = Math.log(1 + (Wn.ds || 0.15));
+        // les noms lus restent une contrainte : s'éloigner de leurs positions (en écarts types) est pénalisé
+        var PT = Wn.pts || [], pen = function (T) {
+          var sw = 0, sq = 0;
+          PT.forEach(function (p) { var du = p.u - uc, dv = p.v - vc, ex = T.X + T.a * du + T.b * dv - p.x, ey = T.Y + T.d * du + T.e * dv - p.y; sq += p.w * (ex * ex + ey * ey) / (p.sig * p.sig); sw += p.w; });
+          return sw ? 0.03 * sq / sw : 0;
+        };
+        var M0 = model(T0, 0), sc0 = score(T0, M0), bestW = { T: T0, sc: sc0, ob: sc0 - pen(T0) };
+        var inWin = function (T) { var sT = Math.sqrt(Math.abs(T.a * T.e - T.b * T.d)); return Math.abs(T.X - T0.X) <= dt && Math.abs(T.Y - T0.Y) <= dt && Math.abs(Math.log(sT / s0w)) <= lds; };
+        var starts = [[0, 0, 0], [-0.5, 0, 0], [0.5, 0, 0], [0, -0.5, 0], [0, 0.5, 0], [0, 0, -0.5], [0, 0, 0.5], [-0.5, -0.5, 0], [0.5, 0.5, 0], [0.5, -0.5, 0], [-0.5, 0.5, 0]];
+        [3, 1].forEach(function (rb, pass) {
+          var Mo = model(T0, rb), cand = [];
+          (pass ? [bestW.T] : starts.map(function (q) { return simT(T0.X + q[0] * dt, T0.Y + q[1] * dt, s0w * Math.exp(q[2] * lds), 0); })).forEach(function (Ts) {
+            var sS = Math.sqrt(Math.abs(Ts.a * Ts.e - Ts.b * Ts.d)), U = sS * Math.max(w, h);
+            var res = nelder(function (p) {
+              var T = simT(Ts.X + p[0] * U, Ts.Y + p[1] * U, sS * Math.exp(p[2]), p[3]);
+              if (Math.abs(p[3]) > 0.03 || !inWin(T)) return 2;
+              return pen(T) - score(T, Mo);
+            }, [0, 0, 0, 0], pass ? [0.004, 0.004, 0.005, 0.004] : [0.015, 0.015, 0.02, 0.006], pass ? 120 : 60);
+            cand.push(simT(Ts.X + res.x[0] * U, Ts.Y + res.x[1] * U, sS * Math.exp(res.x[2]), res.x[3]));
+          });
+          cand.forEach(function (T) { if (!inWin(T)) return; var sc = score(T, M0), ob = sc - pen(T); if (ob > bestW.ob) bestW = { T: T, sc: sc, ob: ob }; });
+          progress(0.4 + 0.6 * (pass + 1) / 2);
+        });
+        var Tb = bestW.T;
+        return { ok: true, win: true, rect: rect, w: w, h: h, score: bestW.sc, seedScore: sc0, gain: bestW.ob - (sc0 - pen(T0)), kind: 'sim', info: info, ms: Date.now() - t0,
+          tf: { a: Tb.a, b: Tb.b, c: Tb.X - Tb.a * uc - Tb.b * vc, d: Tb.d, e: Tb.e, f: Tb.Y - Tb.d * uc - Tb.e * vc } };
+      }
 
       // emprise de la terre
       var bx0 = INF, by0 = INF, bx1 = -INF, by1 = -INF;
@@ -998,7 +1158,6 @@
 
       // candidats distincts (empreinte au sol différente)
       cands.sort(function (a, b) { return b.ncc - a.ncc; });
-      var uc = w / 2, vc = h / 2;
       var center = function (c) { return [c.c + c.s * uc, c.f - c.s * vc]; };
       var same = function (a, b) {
         var ca = center(a), cb = center(b), sz = Math.min(a.s, b.s) * Math.max(w, h);
@@ -1008,21 +1167,8 @@
       if (inp.seed) pick.push({ ncc: 0, s: inp.seed.s, c: inp.seed.X - inp.seed.s * uc, f: inp.seed.Y + inp.seed.s * vc });
       cands.forEach(function (c) { if (pick.length < 7 && !pick.some(function (p) { return same(p, c); })) pick.push(c); });
 
-      // échantillons pour le raffinement : bords terre/eau (tous) + intérieur (sous-échantillonné)
-      var edge = [], inner = [];
-      for (j = 0; j < h; j++) for (i = 0; i < w; i++) {
-        var lv2 = lab[j * w + i]; if (!lv2) continue;
-        var isE = false;
-        for (var dy2 = -2; dy2 <= 2 && !isE; dy2++) { var y2 = j + dy2; if (y2 < 0 || y2 >= h) continue;
-          for (var dx2 = -2; dx2 <= 2; dx2++) { var x2 = i + dx2; if (x2 < 0 || x2 >= w) continue; if (lab[y2 * w + x2] === -lv2) { isE = true; break; } } }
-        (isE ? edge : inner).push(j * w + i);
-      }
-      var smp = [], stE = Math.max(1, Math.ceil(edge.length / 9000)), stI = Math.max(1, Math.ceil(inner.length / 4000));
-      for (i = 0; i < edge.length; i += stE) smp.push(edge[i]);
-      for (i = 0; i < inner.length; i += stI) smp.push(inner[i]);
-      var ns = smp.length, SU = new Float64Array(ns), SV = new Float64Array(ns), SL = new Float64Array(ns), SW = new Float64Array(ns);
-      var wE = stE, wI = stI;
-      for (i = 0; i < ns; i++) { var pp = smp[i]; SU[i] = (pp % w) + 0.5 - uc; SV[i] = ((pp / w) | 0) + 0.5 - vc; SL[i] = lab[pp]; SW[i] = i < Math.ceil(edge.length / stE) ? wE : wI; }
+      if (inp.seedTf) { var sT = inp.seedTf, ss = Math.sqrt(Math.abs(sT.a * sT.e - sT.b * sT.d)); pick.unshift({ ncc: 0, s: ss, c: sT.c, f: sT.f, seed: 1 }); }
+      buildSamples();
 
       // modèle fin autour d'une empreinte
       function model(T, rb) {
@@ -1052,7 +1198,7 @@
         if (out > 0.2 * ns) return -1;
         return vm2 > 1e-9 && vl2 > 1e-9 ? cv / Math.sqrt(vl2 * vm2) : -1;
       }
-      var simT = function (X, Y, s3, th) { var co = Math.cos(th), sn2 = Math.sin(th); return { X: X, Y: Y, a: s3 * co, b: s3 * sn2, d: s3 * sn2, e: -s3 * co }; };
+      function simT(X, Y, s3, th) { var co = Math.cos(th), sn2 = Math.sin(th); return { X: X, Y: Y, a: s3 * co, b: s3 * sn2, d: s3 * sn2, e: -s3 * co }; }
       function refineSim(T0, rbs, iters) {
         var s0 = Math.sqrt(Math.abs(T0.a * T0.e - T0.b * T0.d)), th0 = Math.atan2(T0.b, T0.a), U = s0 * Math.max(w, h), T = T0, sc2 = -1;
         rbs.forEach(function (rb, k) {
@@ -1110,7 +1256,7 @@
       return { ok: true, rect: rect, w: w, h: h, conf: conf, score: final, margin: top.sc - second, kind: kind, info: info, ms: Date.now() - t0,
         tf: { a: T.a, b: T.b, c: T.X - T.a * uc - T.b * vc, d: T.d, e: T.e, f: T.Y - T.d * uc - T.e * vc } };
     }
-    return { run: run, detectScreen: detectScreen, screenGeom: screenGeom, warp: warp };
+    return { run: run, detectScreen: detectScreen, screenGeom: screenGeom, warp: warp, prep: prep, textLines: textLines };
   }
 
   var AUTO_PX = 800;             // taille de l'image d'analyse (plus grand côté)
@@ -1151,6 +1297,8 @@
     return 'var autoCore = ' + autoCore.toString() + ';\nvar CORE = autoCore();\n' +
       'self.onmessage = function (e) { var d = e.data; try {' +
       ' if (d.op === "warp") { var o = CORE.warp(d.px, d.w, d.h, d.G, d.kin, d.kout); self.postMessage({ id: d.id, r: o }, [o.px.buffer]); return; }' +
+      ' if (d.op === "prep") { self.postMessage({ id: d.id, r: { rect: CORE.prep(d.px, d.w, d.h) } }); return; }' +
+      ' if (d.op === "text") { self.postMessage({ id: d.id, r: { lines: CORE.textLines(d.px, d.w, d.h) } }); return; }' +
       ' var r = CORE.run(d, function (p) { self.postMessage({ id: d.id, p: p }); }); self.postMessage({ id: d.id, r: r }); }' +
       ' catch (err) { self.postMessage({ id: d.id, err: String((err && err.message) || err) }); } };';
   }
@@ -1179,6 +1327,8 @@
         try {
           autoLocal = autoLocal || autoCore();
           if (job.op === 'warp') { res(autoLocal.warp(job.px, job.w, job.h, job.G, job.kin, job.kout)); return; }
+          if (job.op === 'prep') { res({ rect: autoLocal.prep(job.px, job.w, job.h) }); return; }
+          if (job.op === 'text') { res({ lines: autoLocal.textLines(job.px, job.w, job.h) }); return; }
           var r = autoLocal.run(job, prog); r.local = true; res(r);
         } catch (e) { rej(e); }
       }, 40);
@@ -1235,28 +1385,461 @@
       });
     });
   }
+  /* ---------- Lecture des noms de lieux (OCR hors ligne) ----------
+     Tesseract.js (vendor/ocr/ : bibliothèque, moteur WebAssembly, modèles « fast » eng + fra), chargé seulement au premier
+     calage automatique, pré-caché par le service worker. Rien n'est envoyé sur Internet. */
+  var OCRDIR = 'vendor/ocr/';
+  var OCR = { p: null, w: null, bad: false, idle: null, log: null };
+  var OCR_UI = ['jason', 'lucia', 'carte', 'infos', 'progression', 'recentrer', 'vue', '2d', 'vue2d', 'ajouter', 'un', 'repere', 'definir', 'une',
+    'destination', 'quitter', 'legende', 'filtres', 'missions', 'mission', 'allez', 'objectif', 'zoom'];
+  // noms affichés par le jeu -> lieux de nos données (le premier trouvé donne la position)
+  var OCR_ALIAS = [
+    ['Starfish', ['Starfish Island']],
+    ['Aéroport de Vice City', ['Vice City International Airport', 'Aéroport international de Vice City']],
+    ['Aéroport international de Vice City', ['Vice City International Airport', 'Aéroport international de Vice City']],
+    ['Centre-ville', ['Downtown']],
+    ['Vice Dale County', ['Vice-Dale County']],
+    ['Comté de Vice-Dale', ['Vice-Dale County']]
+  ];
+  var DICT = null;
+  function ocrKey(s) { return X.norm(s).replace(/[^a-z0-9]+/g, ''); }
+  function buildDict() {
+    if (DICT) return DICT;
+    // écart type de nos positions (unités monde) selon le genre de libellé : quartiers et lieux précis, régions / mers vagues
+    var SIG = { district: 260, poi: 280, city: 650, region: 1200, water: 1200 };
+    var pos = {}, lk = {};
+    (X.labels || []).forEach(function (l) { lk[ocrKey(l.n)] = l.k; if (l.fr) lk[ocrKey(l.fr)] = l.k; });
+    var put = function (n, x, y, k, rank, sg) {
+      var key = ocrKey(n); if (key.length < 4 || !isFinite(x) || !isFinite(y)) return;
+      var kk = lk[key] || k, o = pos[key];
+      if (!o || o.rank > rank) pos[key] = { n: n, key: key, x: x, y: y, k: kk, sig: sg || SIG[kk] || 300, rank: rank };
+    };
+    // noms : ceux des libellés de la carte (+ alias) ; positions : villes et lieux célèbres relevés dans le jeu (gta6map)
+    // quand le nom correspond, sinon nos libellés (estimés)
+    var mk = {}, qd = {};
+    X.markers.forEach(function (m) {
+      if (m.src !== 'gta6map') return;
+      if (m.c === 'city-town' || m.c === 'landmark') { var k = ocrKey(m.n); if (!mk[k] || m.c === 'city-town') mk[k] = m; }
+      // lieux nommés « … – Quartier » ou « … (Quartier) » : leur centre (médiane) situe bien le quartier
+      var q = /\(([^()]+)\)\s*$/.exec(m.n) || /\s[–-]\s*([^–-]+?)(\s+n°\s*\d+|\s+\d+)?\s*$/.exec(m.n);
+      if (q) { var kq = ocrKey(q[1]); (qd[kq] = qd[kq] || []).push(m); }
+    });
+    var med = function (a) { a = a.slice().sort(function (p, q) { return p - q; }); return a[a.length >> 1]; };
+    (X.labels || []).forEach(function (l) {
+      // (les villes et lieux célèbres de gta6map ne sont pas placés comme les noms affichés par le jeu : on garde nos libellés)
+      var x = l.x, y = l.y, rank = 1, sg = 0, Q = qd[ocrKey(l.n)];
+      if (Q && Q.length >= 3 && l.k === 'district') {
+        var mx = med(Q.map(function (o) { return o.x; })), my = med(Q.map(function (o) { return o.y; }));
+        var sp = med(Q.map(function (o) { return Math.hypot(o.x - mx, o.y - my); }));
+        if (sp <= 320) { x = mx; y = my; sg = Math.max(180, 120 + 0.6 * sp); }      // quartier compact : la médiane
+        else { x = (mx + l.x) / 2; y = (my + l.y) / 2; sg = Math.max(320, 0.6 * sp); } // quartier étendu : entre les deux
+        rank = 0.8;
+      }
+      put(l.n, x, y, l.k, rank, sg); if (l.fr) put(l.fr, x, y, l.k, rank, sg);
+    });
+    OCR_ALIAS.forEach(function (al) {
+      for (var i = 0; i < al[1].length; i++) {
+        var k = ocrKey(al[1][i]), o = pos[k] || (mk[k] && { x: mk[k].x, y: mk[k].y, k: 'poi', sig: SIG.poi });
+        if (o) { var key = ocrKey(al[0]); pos[key] = { n: al[0], key: key, x: o.x, y: o.y, k: o.k, sig: o.sig, rank: 0.5 }; return; }
+      }
+    });
+    DICT = Object.keys(pos).map(function (k) {
+      var o = pos[k], ws = X.norm(o.n).split(/[^a-z0-9]+/).filter(Boolean);
+      o.id = Math.round(o.x) + ',' + Math.round(o.y);
+      if (ws.length > 1 && ws[0].length >= 6) o.w1 = ws[0];
+      return o;
+    });
+    // premier mot propre à un seul lieu ?
+    var cnt = {};
+    DICT.forEach(function (o) { if (o.w1) cnt[o.w1] = (cnt[o.w1] || {}), cnt[o.w1][o.id] = 1; });
+    DICT.forEach(function (o) { if (o.w1) o.w1u = Object.keys(cnt[o.w1]).length === 1 && !pos[o.w1]; });
+    return DICT;
+  }
+  function lev(a, b, max) { // distance d'édition (arrêt dès qu'elle dépasse max)
+    var la = a.length, lb = b.length, i, j;
+    if (Math.abs(la - lb) > max) return max + 1;
+    var prev = [], cur = [];
+    for (j = 0; j <= lb; j++) prev[j] = j;
+    for (i = 1; i <= la; i++) {
+      cur[0] = i; var mn = i;
+      for (j = 1; j <= lb; j++) {
+        var c = prev[j - 1] + (a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1);
+        if (prev[j] + 1 < c) c = prev[j] + 1;
+        if (cur[j - 1] + 1 < c) c = cur[j - 1] + 1;
+        cur[j] = c; if (c < mn) mn = c;
+      }
+      if (mn > max) return max + 1;
+      var t = prev; prev = cur; cur = t;
+    }
+    return prev[lb];
+  }
+  function maxEd(n) { return n <= 5 ? 0 : n <= 8 ? 1 : n <= 12 ? 2 : 3; }
+  function ocrTok(raw) { return X.norm(String(raw || '').replace(/[|]/g, 'l')).replace(/0/g, 'o').replace(/1/g, 'l').replace(/[^a-z0-9]+/g, ''); }
+  // lignes lues -> libellés reconnus { e (lieu), u, v (centre dans l'image), w (poids), sig, txt }
+  function ocrMatch(lines, W, H) {
+    var D = buildDict(), found = [];
+    lines.forEach(function (ln) {
+      var T = ln.filter(function (t) { return t.k && OCR_UI.indexOf(t.k) < 0; });
+      if (!T.length) return;
+      var cands = [];
+      for (var i = 0; i < T.length; i++) {
+        var s = '', u0 = 1e9, v0 = 1e9, u1 = -1e9, v1 = -1e9, raw = [];
+        for (var j = i; j < T.length && j < i + 5; j++) {
+          var tk = T[j]; s += tk.k; raw.push(tk.raw);
+          u0 = Math.min(u0, tk.u0); v0 = Math.min(v0, tk.v0); u1 = Math.max(u1, tk.u1); v1 = Math.max(v1, tk.v1);
+          if (s.length > 44) break;
+          var box = [u0, v0, u1, v1], cutL = i === 0 && u0 < 0.02 * W, cutR = j === T.length - 1 && u1 > 0.98 * W, ls = s.length;
+          for (var q = 0; q < D.length; q++) {
+            var e = D[q], L = e.key.length, d, me = maxEd(L);
+            if (Math.abs(L - ls) <= me) { d = lev(s, e.key, me); if (d <= me) cands.push({ e: e, i: i, j: j, box: box, sc: L - d, cut: 0, nch: ls, raw: raw.join(' ') }); }
+            // premier mot seul d'un nom de plusieurs mots (« Waxman » pour Waxman Island, la suite mal lue), s'il n'y a pas d'ambiguïté
+            if (e.w1 && i === j && ls >= 6 && Math.abs(e.w1.length - ls) <= 1) { d = lev(s, e.w1, maxEd(e.w1.length)); if (d <= maxEd(e.w1.length) && e.w1u) cands.push({ e: e, i: i, j: j, box: box, sc: 0.8 * (ls - d), cut: 1, nch: ls, raw: raw.join(' '), part: 1 }); }
+            if ((cutL || cutR) && ls >= 6 && ls >= 0.35 * L && L - ls >= 2) {
+              var m2 = maxEd(ls - 2);
+              if (cutL) { d = lev(s, e.key.slice(L - ls), m2); if (d <= m2) cands.push({ e: e, i: i, j: j, box: box, sc: 0.9 * (ls - d), cut: -1, nch: ls, raw: raw.join(' ') }); }
+              if (cutR) { d = lev(s, e.key.slice(0, ls), m2); if (d <= m2) cands.push({ e: e, i: i, j: j, box: box, sc: 0.9 * (ls - d), cut: 1, nch: ls, raw: raw.join(' ') }); }
+            }
+          }
+        }
+      }
+      cands.sort(function (a, b) { return b.sc - a.sc; });
+      var used = {};
+      // mots « de phrase » hors du nom : texte d'interface (mission, aide), pas un libellé de carte
+      var wordy = function (c) { var n = 0; for (var k = 0; k < T.length; k++) if ((k < c.i || k > c.j) && T[k].k.length >= 3 && /^[a-z]+$/.test(T[k].k)) n++; return n >= 2; };
+      cands.forEach(function (c) {
+        if (wordy(c)) return;
+        for (var k = c.i; k <= c.j; k++) if (used[k]) return;
+        for (k = c.i; k <= c.j; k++) used[k] = 1;
+        var b = c.box, u = (b[0] + b[2]) / 2, v = (b[1] + b[3]) / 2;
+        if (c.cut) { var fw = (b[2] - b[0]) / c.nch * c.e.key.length; u = c.cut < 0 ? b[2] - fw / 2 : b[0] + fw / 2; }
+        found.push({ e: c.e, u: u, v: v, box: b, w: c.cut ? 0.5 : 1, sig: c.e.sig * (c.cut ? 1.3 : 1), cut: c.cut, sc: c.sc, txt: c.raw });
+      });
+    });
+    // doublons (même lieu au même endroit, lu par plusieurs passes) : on garde la meilleure lecture
+    found.sort(function (a, b) { return b.sc - a.sc; });
+    var out = [];
+    found.forEach(function (f) {
+      var hb = Math.max(8, f.box[3] - f.box[1]), b = f.box;
+      if (out.some(function (o) {
+        if (o.e.id === f.e.id && Math.abs(o.u - f.u) < 3 * hb && Math.abs(o.v - f.v) < 1.5 * hb) return true;
+        // deux lieux lus au même endroit (ex. « rt de Vice City » dans « Aéroport de Vice City ») : on garde la meilleure lecture
+        var c = o.box, iw = Math.min(b[2], c[2]) - Math.max(b[0], c[0]), ih = Math.min(b[3], c[3]) - Math.max(b[1], c[1]);
+        return iw > 0 && ih > 0 && iw * ih > 0.4 * Math.min((b[2] - b[0]) * (b[3] - b[1]), (c[2] - c[0]) * (c[3] - c[1]));
+      })) return;
+      out.push(f);
+    });
+    return out;
+  }
+  /* Similitude image -> monde sans rotation (x = s u + c ; y = -s v + f), robuste : RANSAC sur les paires de libellés,
+     puis moindres carrés pondérés (1 / écart type²) sur les libellés cohérents. */
+  function ocrFit(M, W, H) {
+    var diag = Math.hypot(W, H), best = null, i, j;
+    var lsq = function (P) {
+      var sw = 0, um = 0, vm = 0, xm = 0, ym = 0, num = 0, den = 0;
+      P.forEach(function (p) { var o = p.w / (p.sig * p.sig); sw += o; um += o * p.u; vm += o * p.v; xm += o * p.e.x; ym += o * p.e.y; });
+      um /= sw; vm /= sw; xm /= sw; ym /= sw;
+      P.forEach(function (p) { var o = p.w / (p.sig * p.sig), du = p.u - um, dv = p.v - vm; num += o * (du * (p.e.x - xm) - dv * (p.e.y - ym)); den += o * (du * du + dv * dv); });
+      var s = den > 0 ? num / den : 0;
+      return s > 0 ? { s: s, c: xm - s * um, f: ym + s * vm } : null;
+    };
+    var resid = function (T, p) { return Math.hypot(T.s * p.u + T.c - p.e.x, -T.s * p.v + T.f - p.e.y); };
+    var inliers = function (T) {
+      var by = {};
+      M.forEach(function (p) {
+        var r = resid(T, p), z = r / p.sig;
+        if (z > 2.5 || (by[p.e.id] && by[p.e.id].z <= z)) return;
+        by[p.e.id] = { p: p, z: z, r: r };
+      });
+      return Object.keys(by).map(function (k) { return by[k]; });
+    };
+    var plaus = function (T) { return T && T.s * W > 400 && T.s * W < 30000; };
+    for (i = 0; i < M.length; i++) for (j = i + 1; j < M.length; j++) {
+      var A = M[i], B = M[j];
+      if (A.e.id === B.e.id) continue;
+      var du = B.u - A.u, dv = -(B.v - A.v), dpx = Math.hypot(du, dv), dx = B.e.x - A.e.x, dy = B.e.y - A.e.y, dW = Math.hypot(dx, dy);
+      if (dpx < 0.06 * diag || dW < 50) continue;
+      var ang = Math.abs(Math.atan2(du * dy - dv * dx, du * dx + dv * dy)), tol = Math.min(0.6, Math.atan((A.sig + B.sig) / dW) + 0.06);
+      if (ang > tol) continue;
+      var T = lsq([A, B]);
+      if (!plaus(T)) continue;
+      var I = inliers(T), sc = 0, zs = 0;
+      I.forEach(function (q) { sc += q.p.w * (q.p.sig < 500 ? 1 : 0.4); zs += q.z; });
+      if (!best || sc > best.sc + 1e-9 || (Math.abs(sc - best.sc) < 1e-9 && zs < best.zs)) best = { sc: sc, zs: zs, T: T, ang: ang / tol };
+    }
+    if (!best) return null;
+    var T2 = best.T, I2 = inliers(T2);
+    for (var it = 0; it < 4; it++) {
+      var T3 = I2.length >= 2 ? lsq(I2.map(function (q) { return q.p; })) : null;
+      if (!plaus(T3)) break;
+      var I3 = inliers(T3);
+      if (I3.length < 2) break;
+      T2 = T3; I2 = I3;
+    }
+    if (I2.length < 2) return null;
+    var pts = I2.filter(function (q) { return q.p.sig < 500; }).length, rs = 0, iw = 0;
+    I2.forEach(function (q) { rs += q.r; iw += q.p.w / (q.p.sig * q.p.sig); });
+    // assez sûr pour un simple raffinement local : 2 lieux précis, ou 1 lieu précis + 1 ville, cohérents
+    var strong = (pts >= 2 || (pts >= 1 && I2.filter(function (q) { return q.p.sig <= 700; }).length >= 2)) && (I2.length >= 3 || best.ang < 0.8);
+    // incertitude du calage : position (unités monde) et échelle (relative)
+    var sigPos = 1 / Math.sqrt(iw), spread = 0, cu = 0, cv = 0;
+    I2.forEach(function (q) { cu += q.p.u / I2.length; cv += q.p.v / I2.length; });
+    I2.forEach(function (q) { spread += T2.s * T2.s * ((q.p.u - cu) * (q.p.u - cu) + (q.p.v - cv) * (q.p.v - cv)); });
+    var sigScale = sigPos * Math.sqrt(I2.length) / Math.max(1, Math.sqrt(spread));
+    return { tf: { a: T2.s, b: 0, c: T2.c, d: 0, e: -T2.s, f: T2.f }, s: T2.s, inl: I2.map(function (q) { return q.p; }), n: I2.length, pts: pts,
+      strong: strong, res: rs / I2.length, angRel: best.ang, sigPos: sigPos, sigScale: sigScale };
+  }
+
+  function ocrSupported() {
+    try {
+      // WebAssembly avec SIMD (moteur fourni : variante SIMD seulement) et Web Workers
+      return typeof WebAssembly === 'object' && typeof Worker !== 'undefined' && !!window.Promise &&
+        WebAssembly.validate(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15, 253, 98, 11]));
+    } catch (e) { return false; }
+  }
+  function ocrOn() { return !OCR.bad && X.store.get('mybgOcr', true) !== false && ocrSupported(); }
+  function withTimeout(p, ms) { return new Promise(function (res, rej) { var t = setTimeout(function () { rej(new Error('trop long')); }, ms); p.then(function (v) { clearTimeout(t); res(v); }, function (e) { clearTimeout(t); rej(e); }); }); }
+  function ocrLoad() {
+    if (OCR.w) return Promise.resolve(OCR.w);
+    if (OCR.p) return OCR.p;
+    var base = new URL(OCRDIR, document.baseURI).href;
+    OCR.p = withTimeout(new Promise(function (res, rej) {
+      if (window.Tesseract && window.Tesseract.createWorker) { res(); return; }
+      var s = document.createElement('script');
+      s.src = base + 'tesseract.min.js'; s.async = true;
+      s.onload = function () { if (window.Tesseract && window.Tesseract.createWorker) res(); else rej(new Error('ocr')); };
+      s.onerror = function () { rej(new Error('ocr')); };
+      document.head.appendChild(s);
+    }).then(function () {
+      return window.Tesseract.createWorker(['eng', 'fra'], 1, {
+        workerPath: base + 'worker.min.js', corePath: base + 'tesseract-core-simd-lstm.js', langPath: base.replace(/\/$/, ''),
+        workerBlobURL: false, cacheMethod: 'none', gzip: true,
+        logger: function (m) { if (OCR.log && m && typeof m.progress === 'number') OCR.log(m.status, m.progress); },
+        errorHandler: function () { /* signalé par la promesse */ }
+      });
+    }).then(function (w) {
+      return w.setParameters({ user_defined_dpi: '300', debug_file: '/dev/null' }).then(function () { return w; });
+    }), 30000).then(function (w) { OCR.w = w; OCR.p = null; return w; }, function (e) { OCR.p = null; OCR.bad = true; throw e; });
+    return OCR.p;
+  }
+  function ocrIdle() {
+    clearTimeout(OCR.idle);
+    OCR.idle = setTimeout(function () { var w = OCR.w; OCR.w = null; if (w) { try { w.terminate(); } catch (e) { /* */ } } }, 120000); // libère la mémoire
+  }
+  function loadImg(url) {
+    return new Promise(function (res, rej) { var img = new Image(); img.onload = function () { res(img); }; img.onerror = function () { rej(new Error('image illisible')); }; img.src = url; });
+  }
+  // mots reconnus -> lignes (même hauteur, alignés, rapprochés)
+  function wordsToLines(W2) {
+    W2.sort(function (a, b) { return a.u0 - b.u0; });
+    var lines = [];
+    W2.forEach(function (w) {
+      var h = w.v1 - w.v0, best = null;
+      lines.forEach(function (L) {
+        var l = L[L.length - 1], hl = l.v1 - l.v0, ov = Math.min(l.v1, w.v1) - Math.max(l.v0, w.v0);
+        if (ov < 0.5 * Math.min(h, hl) || Math.max(h, hl) > 1.8 * Math.min(h, hl)) return;
+        var gap = w.u0 - l.u1;
+        if (gap > 1.6 * Math.max(h, hl) || gap < -0.5 * h) return;
+        if (!best || gap < best.gap) best = { L: L, gap: gap };
+      });
+      if (best) best.L.push(w); else lines.push([w]);
+    });
+    return lines;
+  }
+  function tessWords(r) {
+    var out = [];
+    ((r && r.data && r.data.blocks) || []).forEach(function (b) { (b.paragraphs || []).forEach(function (p) { (p.lines || []).forEach(function (l) { (l.words || []).forEach(function (w) {
+      if (w && w.bbox && w.text && w.confidence >= 15) out.push({ raw: w.text, k: ocrTok(w.text), conf: w.confidence, b: w.bbox });
+    }); }); }); });
+    return out;
+  }
+  /* Lit les noms de lieux de l'image stockée : 1) page entière ; 2) lignes de texte repérées (lettres seules, noir sur blanc) ;
+     3) mêmes lignes en niveaux de gris contrastés. Renvoie les lignes de mots (coordonnées de l'image stockée). */
+  function ocrRead(it, pg) {
+    var t0 = Date.now(), info = {};
+    return ocrLoad().then(function (wk) {
+      clearTimeout(OCR.idle);
+      return loadImg(it.url).then(function (img) {
+        var W = img.naturalWidth, H = img.naturalHeight, kd = Math.max(0.5, Math.min(1.6, 930 / H));
+        var dw = Math.round(W * kd), dh = Math.round(H * kd), cv = document.createElement('canvas'); cv.width = dw; cv.height = dh;
+        var g = cv.getContext('2d', { willReadFrequently: true }); try { g.imageSmoothingQuality = 'high'; } catch (e) { /* */ }
+        g.drawImage(img, 0, 0, dw, dh);
+        var id = g.getImageData(0, 0, dw, dh);
+        info.loadMs = Date.now() - t0;
+        return runCore({ op: 'text', px: id.data, w: dw, h: dh }, function () { /* */ }).then(function (r) {
+          var TL = (r && r.lines) || [];
+          info.detLines = TL.length; info.detMs = Date.now() - t0 - info.loadMs;
+          // planches : chaque ligne repérée, mise à 32 px de haut, empilées
+          var TH = 32, gap = 26, y = gap, wmax = 0, strips = [];
+          TL.forEach(function (l) {
+            var lh = l.y1 - l.y0, k = TH / lh, pw = Math.round(0.45 * lh);
+            var sx0 = Math.max(0, l.x0 - pw), sy0 = Math.max(0, l.y0 - pw), sx1 = Math.min(dw, l.x1 + pw), sy1 = Math.min(dh, l.y1 + pw);
+            var ow = Math.round((sx1 - sx0) * k), oh = Math.round((sy1 - sy0) * k);
+            if (y + oh + gap > 16000 || ow > 3000) return;
+            strips.push({ l: l, sx0: sx0, sy0: sy0, sx1: sx1, sy1: sy1, k: k, y0: y, ow: ow, oh: oh });
+            y += oh + gap; wmax = Math.max(wmax, ow);
+          });
+          var SWd = wmax + 2 * gap, SHd = y, cm = null, cg = null;
+          if (strips.length) {
+            cm = document.createElement('canvas'); cm.width = SWd; cm.height = SHd;
+            cg = document.createElement('canvas'); cg.width = SWd; cg.height = SHd;
+            var gm = cm.getContext('2d'), gg = cg.getContext('2d', { willReadFrequently: true });
+            gm.fillStyle = '#fff'; gm.fillRect(0, 0, SWd, SHd); gg.fillStyle = '#fff'; gg.fillRect(0, 0, SWd, SHd);
+            var tmp = document.createElement('canvas'), gt = tmp.getContext('2d', { willReadFrequently: true });
+            strips.forEach(function (s) {
+              var l = s.l, bw = l.x1 - l.x0, bh = l.y1 - l.y0;
+              tmp.width = bw; tmp.height = bh;
+              var im = gt.createImageData(bw, bh);
+              for (var q = 0; q < bw * bh; q++) { var v = l.bits[q] ? 0 : 255; im.data[4 * q] = v; im.data[4 * q + 1] = v; im.data[4 * q + 2] = v; im.data[4 * q + 3] = 255; }
+              gt.putImageData(im, 0, 0);
+              gm.drawImage(tmp, 0, 0, bw, bh, gap + (l.x0 - s.sx0) * s.k, s.y0 + (l.y0 - s.sy0) * s.k, bw * s.k, bh * s.k);
+              gg.drawImage(cv, s.sx0, s.sy0, s.sx1 - s.sx0, s.sy1 - s.sy0, gap, s.y0, s.ow, s.oh);
+              var gi = gg.getImageData(gap, s.y0, s.ow, s.oh), d = gi.data, n = s.ow * s.oh, hist = new Uint32Array(256), lo = 0, hi = 255, acc = 0;
+              for (q = 0; q < n; q++) { var L = (0.3 * d[4 * q] + 0.59 * d[4 * q + 1] + 0.11 * d[4 * q + 2]) | 0; d[4 * q] = L; hist[L]++; }
+              for (q = 0; q < 256; q++) { acc += hist[q]; if (acc > 0.01 * n) { lo = q; break; } }
+              for (acc = 0, q = 255; q >= 0; q--) { acc += hist[q]; if (acc > 0.01 * n) { hi = q; break; } }
+              var sc = 255 / Math.max(1, hi - lo);
+              for (q = 0; q < n; q++) { var v2 = 255 - Math.max(0, Math.min(255, (d[4 * q] - lo) * sc)); d[4 * q] = d[4 * q + 1] = d[4 * q + 2] = v2; }
+              gg.putImageData(gi, gap, s.y0);
+            });
+            tmp.width = 1; tmp.height = 1;
+          }
+          info.strips = strips.length;
+          var lines = [], P = [[cv, 'page']];
+          if (cm) { P.push([cm, 'mask']); P.push([cg, 'gray']); }
+          var k0 = 0;
+          OCR.log = function (st, p) { if (st === 'recognizing text') pg((k0 + p) / P.length); };
+          var step = function (k) {
+            if (k >= P.length) return Promise.resolve();
+            k0 = k;
+            return wk.setParameters({ tessedit_pageseg_mode: '11' }).then(function () {
+              return wk.recognize(P[k][0], {}, { blocks: true, text: false });
+            }).then(function (res) {
+              var ws = tessWords(res), kind = P[k][1];
+              if (kind === 'page') {
+                var wl = ws.map(function (w) { return { raw: w.raw, k: w.k, u0: w.b.x0 / kd, v0: w.b.y0 / kd, u1: w.b.x1 / kd, v1: w.b.y1 / kd }; });
+                wordsToLines(wl).forEach(function (L) { lines.push(L); });
+              } else {
+                var by = strips.map(function () { return []; });
+                ws.forEach(function (w) {
+                  var cy = (w.b.y0 + w.b.y1) / 2;
+                  for (var q = 0; q < strips.length; q++) {
+                    var s = strips[q];
+                    if (cy >= s.y0 && cy < s.y0 + s.oh) {
+                      var f = function (X2, Y2) { return [(s.sx0 + (X2 - gap) / s.k) / kd, (s.sy0 + (Y2 - s.y0) / s.k) / kd]; };
+                      var p0 = f(w.b.x0, w.b.y0), p1 = f(w.b.x1, w.b.y1);
+                      by[q].push({ raw: w.raw, k: w.k, u0: p0[0], v0: p0[1], u1: p1[0], v1: p1[1] });
+                      break;
+                    }
+                  }
+                });
+                // regroupées en lignes dans l'image (une ligne de texte coupée en deux par le repérage est recollée)
+                var all = []; by.forEach(function (L) { all = all.concat(L); });
+                wordsToLines(all).forEach(function (L) { lines.push(L); });
+              }
+              info[kind + 'Ms'] = Date.now() - t0;
+              return step(k + 1);
+            });
+          };
+          return step(0).then(function () {
+            OCR.log = null;
+            cv.width = 1; cv.height = 1; if (cm) { cm.width = 1; cm.height = 1; cg.width = 1; cg.height = 1; }
+            info.ms = Date.now() - t0;
+            info.text = lines.map(function (L) { return L.map(function (w) { return w.raw; }).join(' '); }).filter(function (t) { return /[A-Za-zÀ-ÿ]{4}/.test(t); });
+            ocrIdle();
+            return { lines: lines, W: W, H: H, info: info };
+          });
+        });
+      });
+    }).catch(function (e) { OCR.log = null; ocrKill(); throw e; });
+  }
+  function ocrKill() { // moteur dans un état inconnu (erreur, trop long) : on le relance la prochaine fois
+    clearTimeout(OCR.idle); OCR.log = null;
+    var w = OCR.w; OCR.w = null;
+    if (w) { try { w.terminate(); } catch (e) { /* */ } }
+  }
+  // calage par les noms lus : { tf (pixels de l'image stockée), strong, names, ... } ou null
+  function ocrCalibrate(it, pg) {
+    return withTimeout(ocrRead(it, pg), 60000).catch(function (e) { ocrKill(); throw e; }).then(function (R) {
+      var M = ocrMatch(R.lines, R.W, R.H), F = M.length >= 2 ? ocrFit(M, R.W, R.H) : null;
+      var out = { info: R.info, read: M.map(function (m) { return { n: m.e.n, x: m.e.x, y: m.e.y, u: m.u, v: m.v, box: m.box, txt: m.txt, cut: m.cut, k: m.e.k }; }), fit: null };
+      if (F) {
+        out.fit = F; out.tf = F.tf; out.strong = F.strong;
+        out.names = []; F.inl.forEach(function (p) { if (out.names.indexOf(p.e.n) < 0) out.names.push(p.e.n); });
+        out.inl = F.inl.map(function (p) { return { n: p.e.n, x: p.e.x, y: p.e.y, u: p.u, v: p.v, box: p.box, sig: p.sig, k: p.e.k, cut: p.cut }; });
+      }
+      return out;
+    });
+  }
+
   /* Calage automatique d'une capture : renvoie { conf: 'good'|'mid'|'bad', tf (pixels de l'image stockée), r (détails) }.
      Si c'est une photo d'écran, l'image de la capture est remplacée par l'écran redressé (même si le calage échoue :
      le calage à la main est alors plus facile). */
   function autoCalibrate(it, prog) {
     var land = flatLand();
     if (!land.polys.length) return Promise.resolve({ conf: 'bad', tf: null, r: { why: 'land' } });
-    var t0 = Date.now(), pg = prog || function () { /* */ };
+    var t0 = Date.now(), pg = prog || function () { /* */ }, msg = function (m) { if (pg.msg) pg.msg(m); }, noop = function () { /* */ };
     return analysisPixels(it).then(function (a) {
-      var job = { px: a.px, w: a.w, h: a.h, polys: land.polys, holes: land.holes, rectify: !it.rectified };
-      return runCore(job, function (p) { pg(0.92 * p); }).then(function (r) {
-        r.aw = a.w; r.ah = a.h; r.worker = !r.local;
-        var after = r.rect && items.indexOf(it) >= 0 ? rectifyItem(it, a, r.rect).catch(function () { return null; }) : Promise.resolve(null);
+      var rectify = !it.rectified, inList = items.indexOf(it) >= 0;
+      // 1. photo d'une télé : l'écran est redressé tout de suite (la lecture des noms se fait sur l'image redressée)
+      var pre = rectify ? runCore({ op: 'prep', px: a.px, w: a.w, h: a.h }, noop).catch(function () { return null; }) : Promise.resolve(null);
+      return pre.then(function (pr) {
+        var rect = pr && pr.rect;
+        var after = rect && inList ? rectifyItem(it, a, rect).catch(function () { return null; }) : Promise.resolve(null);
         return after.then(function (k) {
-          pg(1);
-          r.totalMs = Date.now() - t0; r.rectified = !!k;
-          if (!r.ok || !r.tf || (r.rect && !k)) return { conf: 'bad', tf: null, r: r };
-          var t = r.tf, tf;
-          if (k) { var q = 1 / k.kout; tf = { a: t.a * q, b: t.b * q, c: t.c, d: t.d * q, e: t.e * q, f: t.f }; }
-          else { var kx = a.w / it.w, ky = a.h / it.h; tf = { a: t.a * kx, b: t.b * ky, c: t.c, d: t.d * kx, e: t.e * ky, f: t.f }; }
-          tf.kind = r.kind === 'affine' ? 'affine' : 'sim';
-          if (!isFinite(tf.a + tf.b + tf.c + tf.d + tf.e + tf.f)) return { conf: 'bad', tf: null, r: r };
-          return { conf: r.conf, tf: r.conf === 'bad' ? null : tf, best: tf, r: r };
+          pg(0.05);
+          // pixels d'analyse (écran redressé à 360 px de haut, ou image réduite) <-> pixels de l'image stockée
+          var kx = a.w / it.w, ky = a.h / it.h;
+          var toStored = function (t) {
+            if (k) { var q = 1 / k.kout; return { a: t.a * q, b: t.b * q, c: t.c, d: t.d * q, e: t.e * q, f: t.f }; }
+            return { a: t.a * kx, b: t.b * ky, c: t.c, d: t.d * kx, e: t.e * ky, f: t.f };
+          };
+          var toRun = function (t) {
+            if (k) { var q = k.kout; return { a: t.a * q, b: t.b * q, c: t.c, d: t.d * q, e: t.e * q, f: t.f }; }
+            return { a: t.a / kx, b: t.b / ky, c: t.c, d: t.d / kx, e: t.e / ky, f: t.f };
+          };
+          // 2. lecture des noms de lieux (si possible ; sinon on passe directement au recalage terre / eau)
+          var useOcr = ocrOn() && (!rect || !!k);
+          if (useOcr) msg('Calage automatique : lecture des noms de lieux…');
+          var oc = useOcr ? ocrCalibrate(it, function (p) { pg(0.05 + 0.5 * p); }).catch(function (e) { return { err: String((e && e.message) || e) }; }) : Promise.resolve(null);
+          return oc.then(function (o) {
+            var strong = !!(o && o.tf && o.strong), p0 = useOcr ? 0.56 : 0.05;
+            msg(strong ? 'Calage automatique : vérification avec les côtes…' : 'Calage automatique de ta capture…');
+            // 3. recalage terre / eau : local autour des noms lus (fenêtre), sinon recherche complète (les noms lus servent d'indice)
+            var job = { px: a.px, w: a.w, h: a.h, polys: land.polys, holes: land.holes, rectify: rectify };
+            if (strong) {
+              // fenêtre : au moins ± 300 unités et ± 15 %, plus si les noms lus situent mal la capture (villes, lieux peu précis)
+              job.win = toRun(o.tf); job.win.dt = Math.max(300, Math.min(900, 1.5 * o.fit.sigPos)); job.win.ds = Math.max(0.15, Math.min(0.4, 1.5 * o.fit.sigScale));
+              var kp = k ? 1 / k.kout : kx;
+              job.win.pts = o.fit.inl.map(function (p) { return { u: p.u * kp, v: p.v * (k ? kp : ky), x: p.e.x, y: p.e.y, sig: p.sig, w: p.w }; });
+            }
+            else if (o && o.tf) job.seedTf = toRun(o.tf);
+            var run = runCore(job, function (p) { pg(p0 + (0.98 - p0) * p); });
+            if (strong) run = run.catch(function () { return { ok: false, why: 'err', local: false }; });
+            return run.then(function (r) {
+              r.aw = a.w; r.ah = a.h; r.worker = !r.local; r.ocr = o; r.rectified = !!k; r.totalMs = Date.now() - t0;
+              if (rect && !r.rect) r.rect = rect;
+              pg(1);
+              if (rect && !k) return { conf: 'bad', tf: null, r: r };
+              if (strong) {
+                var tfo = copyT(o.tf), tfl = r.ok && r.tf ? toStored(r.tf) : null;
+                var better = !!(tfl && isFinite(tfl.a + tfl.c + tfl.e + tfl.f) && r.gain >= 0.015);
+                var tf = better ? tfl : tfo;
+                tf.kind = 'sim';
+                r.method = better ? 'noms+cotes' : 'noms';
+                r.kind = 'sim';
+                // sûr : au moins 2 lieux précis cohérents (3 noms, ou 2 bien alignés, ou confirmés par les côtes) ; sinon « à vérifier »
+                var conf = o.fit.pts >= 2 && (o.fit.n >= 3 || better || o.fit.angRel < 0.5) ? 'good' : 'mid';
+                r.conf = conf;
+                return { conf: conf, tf: tf, best: tf, r: r, names: o.names };
+              }
+              r.method = 'cotes';
+              if (!r.ok || !r.tf) return { conf: 'bad', tf: null, r: r };
+              var tf2 = toStored(r.tf);
+              tf2.kind = r.kind === 'affine' ? 'affine' : 'sim';
+              if (!isFinite(tf2.a + tf2.b + tf2.c + tf2.d + tf2.e + tf2.f)) return { conf: 'bad', tf: null, r: r };
+              return { conf: r.conf, tf: r.conf === 'bad' ? null : tf2, best: tf2, r: r };
+            });
+          });
         });
       });
     });
@@ -1264,7 +1847,12 @@
   function autoInfo(it, o) {
     var r = o.r || {};
     return { id: it.id, conf: o.conf, score: r.score, margin: r.margin, ms: r.totalMs, worker: r.worker, kind: r.kind, rectified: !!r.rectified,
+      method: r.method, names: o.names || null, ocr: r.ocr || null, seedScore: r.seedScore,
       rect: r.rect ? { H: r.rect.H, u0: r.rect.u0, SH: r.rect.SH, aw: r.aw, ah: r.ah } : null, info: r.info, tf: copyT(o.tf), best: copyT(o.best) };
+  }
+  function namesMsg(names) {
+    var n = (names || []).slice(0, 4);
+    return 'Calage par les noms lus : ' + n.join(', ') + ((names || []).length > n.length ? '…' : '');
   }
   function startAuto(it, isNew) {
     var prev = it.tf ? copyT(it.tf) : null;
@@ -1277,16 +1865,18 @@
       X.toast('Calage automatique impossible : calage à la main');
       calOpen(it, isNew, msg);
     };
-    autoCalibrate(it, busyProg).then(function (o) {
+    var pg = function (p) { busyProg(p); };
+    pg.msg = function (m) { if (!$('busy').hidden) busyShow(m); };
+    autoCalibrate(it, pg).then(function (o) {
       lastAuto = autoInfo(it, o); autoLog.push(lastAuto);
       if (items.indexOf(it) < 0) { busyShow(''); busyProg(null); return; }
       if (o.conf === 'bad' || !o.tf) { fail('bad'); return; }
       busyShow(''); busyProg(null);
       it.tf = copyT(o.tf); it.pts = []; it.show = true;
       saveMeta(it); syncLayers(); renderList();
-      adjOpen(it, true, { auto: o.conf, prev: prev });
+      adjOpen(it, true, { auto: o.conf, prev: prev, names: o.names });
       fitTo(it);
-      X.toast(o.conf === 'good' ? 'Calage automatique ✔' : 'Calage automatique fait : vérifie-le');
+      X.toast(o.names ? namesMsg(o.names) + (o.conf === 'good' ? ' ✔' : ' : vérifie-le') : o.conf === 'good' ? 'Calage automatique ✔' : 'Calage automatique fait : vérifie-le');
     }).catch(function () { lastAuto = { id: it.id, conf: 'error' }; fail('err'); });
   }
 
@@ -1334,10 +1924,12 @@
         if (o.pre) { done.push({ it: o.it, conf: 'preset' }); return; }
         if (!autoOn()) { done.push({ it: o.it, conf: 'manual' }); return; }
         busyShow(lab + ' : calage automatique…');
-        return autoCalibrate(o.it, function (p) { busyProg((k + p) / n); }).then(function (a) {
+        var pgk = function (p) { busyProg((k + p) / n); };
+        pgk.msg = function (m) { busyShow(lab + ' : ' + (/^Calage automatique : /.test(m) ? m.replace(/^Calage automatique : /, '') : 'calage automatique…')); };
+        return autoCalibrate(o.it, pgk).then(function (a) {
           lastAuto = autoInfo(o.it, a); autoLog.push(lastAuto);
           if (a.tf && a.conf !== 'bad') { o.it.tf = copyT(a.tf); o.it.pts = []; o.it.show = true; saveMeta(o.it); }
-          done.push({ it: o.it, conf: a.tf && a.conf !== 'bad' ? a.conf : 'bad' });
+          done.push({ it: o.it, conf: a.tf && a.conf !== 'bad' ? a.conf : 'bad', names: a.names || null });
         }, function () { done.push({ it: o.it, conf: 'bad' }); });
       }, function () { done.push({ it: null, conf: 'err' }); }).then(next);
     };
@@ -1351,7 +1943,7 @@
       if (ok.length) {
         ok.sort(function (p, q) { return scaleOf(p.it.tf) - scaleOf(q.it.tf); });
         var mid = ok.filter(function (d) { return d.conf === 'mid'; })[0], first = mid || ok[0];
-        adjOpen(first.it, true, { auto: first.conf === 'mid' ? 'mid' : 'good', prev: null });
+        adjOpen(first.it, true, { auto: first.conf === 'mid' ? 'mid' : 'good', prev: null, names: first.names });
         fitTo(first.it);
       } else if (bad.length) { X.openPanel(); renderList(); }
     });
@@ -1588,7 +2180,7 @@
     X.closeSheet(); if (!X.isWide()) X.closePanel();
     if (adj) adjClose(false);
     adj = { it: it, t0: copyT(it.tf), check: !!check, ptrs: {}, g: null, mode: null, maxB: X.map.options.maxBounds || null,
-      auto: auto ? auto.auto : '', prev: auto ? auto.prev : undefined };
+      auto: auto ? auto.auto : '', prev: auto ? auto.prev : undefined, names: auto ? auto.names : null };
     if (adj.maxB) X.map.setMaxBounds(null); // libre pendant la vérification (la barre du bas cache une partie de l'écran)
     if (!it.show) { it.show = true; syncLayers(); renderList(); }
     document.body.classList.add('mybg-adjust');
@@ -1602,6 +2194,10 @@
       $('adjText').textContent = adj.auto === 'good' ?
         'Vérifie : les contours bleus doivent suivre les côtes de ta capture. Si c\'est bon, touche « C\'est bon ». Un petit décalage ? « Bouger la capture ». Complètement faux ? « Caler à la main ».' :
         'L\'app n\'est pas sûre d\'elle : regarde si les contours bleus suivent bien les côtes de ta capture (zoome si besoin). Si c\'est bon, touche « C\'est bon ». Sinon, « Caler à la main ».';
+      if (adj.names && adj.names.length) {
+        $('adjText').textContent = namesMsg(adj.names) + (adj.auto === 'good' ? ' ✔ ' : '. ') +
+          'Vérifie que les points de l\'app tombent au bon endroit sur ta capture (nos contours bleus des côtes sont approximatifs). Un petit décalage ? « Bouger la capture ». Complètement faux ? « Caler à la main ».';
+      }
       $('adjCancel').textContent = 'Caler à la main';
     }
     $('adjDone').lastChild.textContent = check ? 'C\'est bon' : 'Terminé';
@@ -1800,13 +2396,16 @@
     init: init,
     busy: function () { return !!(cal || adj); },
     setAuto: function (on) { if (X) X.store.set('mybgAuto', !!on); },
+    setOcr: function (on) { if (X) X.store.set('mybgOcr', !!on); }, // lecture des noms de lieux (activée par défaut)
     // pour les tests automatisés
     _debug: function () {
       return { memOnly: memOnly, hasDb: !!db, calMap: calMap, cal: cal, adj: adj, rep: REP, auto: lastAuto, autoLog: autoLog, autoOn: autoOn(),
+        ocr: { on: X ? ocrOn() : false, supported: ocrSupported(), loaded: !!OCR.w, bad: OCR.bad, lib: !!window.Tesseract },
         items: items.map(function (it) { return { id: it.id, name: it.name, w: it.w, h: it.h, tf: copyT(it.tf), rectified: !!it.rectified, url: it.url, pts: it.pts, show: it.show, op: it.op, onMap: !!(it.layer && X.map.hasLayer(it.layer)), z: it.layer ? it.layer.options.zIndex : 0, bytes: it.blob ? it.blob.size : 0 }; }) };
     },
     // tests : calage automatique d'une image (URL) sans interface ; suppression d'une capture
     _autoTest: function (url, w, h) { return autoCalibrate({ url: url, w: w, h: h }).then(function (o) { return { conf: o.conf, tf: o.tf, r: o.r }; }); },
+    _ocr: function (url) { return ocrCalibrate({ url: url }, function () { /* */ }); },
     _remove: function (id) { var it = items.filter(function (x) { return x.id === id; })[0]; if (it) removeItem(it); }
   };
 })();

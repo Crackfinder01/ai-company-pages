@@ -1,6 +1,6 @@
 /* Service worker « Carte GTA 6 » : pré-cache de tous les fichiers, stratégie cache d'abord.
    VERSION et PRECACHE sont réécrits par `python3 build_data.py --finalize`. */
-const VERSION = 'cf0bbc3c6d';
+const VERSION = '186a36150d';
 const CACHE = 'carte-gta6-' + VERSION;
 const PRECACHE = [
   './',
@@ -38,7 +38,13 @@ const PRECACHE = [
   './vendor/leaflet/images/marker-icon.png',
   './vendor/leaflet/images/marker-shadow.png',
   './vendor/markercluster/MarkerCluster.css',
-  './vendor/markercluster/leaflet.markercluster.js'
+  './vendor/markercluster/leaflet.markercluster.js',
+  './vendor/ocr/eng.traineddata.gz',
+  './vendor/ocr/fra.traineddata.gz',
+  './vendor/ocr/tesseract-core-simd-lstm.js',
+  './vendor/ocr/tesseract-core-simd-lstm.wasm',
+  './vendor/ocr/tesseract.min.js',
+  './vendor/ocr/worker.min.js'
 ];
 
 self.addEventListener('install', (event) => {

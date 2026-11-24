@@ -713,3 +713,10 @@ body.mybg-on .leaflet-streetlbl-pane { opacity: .4; }
 /* crédits : attribution sur une ligne repliable sur mobile */
 .leaflet-control-attribution { max-width: calc(100vw - 90px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .leaflet-control-attribution:hover, .leaflet-control-attribution:focus-within { white-space: normal; }
+
+.chapmk { position: relative; }
+.chapmk > b, .chapmk > span { position: absolute; left: 0; white-space: nowrap; transform: translateX(-50%); pointer-events: auto; cursor: pointer; }
+.chapmk > b { top: -46px; font: 800 13px/1 var(--brand, system-ui); letter-spacing: .06em; color: #fff; background: #ff2e97; border: 2px solid #fff; border-radius: 999px; padding: 5px 9px; box-shadow: 0 3px 10px rgba(0,0,0,.45); }
+.chapmk > b::after { content: ""; position: absolute; left: 50%; bottom: -8px; margin-left: -6px; border: 6px solid transparent; border-top-color: #fff; border-bottom: 0; }
+.chapmk > span { top: -70px; font: 700 12px/1.2 var(--brand, system-ui); color: #1a1230; background: rgba(255,255,255,.92); border-radius: 6px; padding: 3px 7px; box-shadow: 0 2px 6px rgba(0,0,0,.3); }
+.chapbadge { display: inline-block; margin-left: 6px; padding: 3px 9px; border-radius: 999px; background: #ff2e97; color: #fff; font-weight: 700; font-size: 13px; }

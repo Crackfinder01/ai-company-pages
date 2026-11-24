@@ -141,7 +141,7 @@
   var iconCache = {};
   var routes = [], zones = [];
   var F = { min: 0, diff: {}, notrack: false, unlocked: false };   // filtres
-  var opt = { amt: true, size: false, zones: true, zk: {}, grid: false };         // options d'affichage
+  var opt = { amt: true, size: false, zones: true, zk: {}, grid: false, chap: true };         // options d'affichage
   var has = { amt: false, diff: false, notrack: false, unlocked: false };
   var zoneLayer = null, zoneRenderer = null;
   var route = null;         // tournée en cours : { r, pts, idx, line, glow, nums }
@@ -264,7 +264,7 @@
         cats[m.c] = { id: m.c, g: 'autres', n: String(m.c || 'Autres'), color: '#cccccc', icon: 'pin', hidden: false, presets: [], list: [], ndone: 0 };
         catOrder.push(m.c);
       }
-      var o = { id: String(m.id), c: m.c, x: m.x, y: m.y, n: m.n || 'Sans nom', d: m.d || '', g: typeof m.g === 'string' ? m.g.trim() : '', approx: !!m.approx, src: m.src || '', v: (m.v && typeof m.v === 'object') ? m.v : null, l: (m.l && typeof m.l === 'object') ? m.l : null, i: parseInfo(m.i), mk: null, on: false };
+      var o = { id: String(m.id), c: m.c, x: m.x, y: m.y, n: m.n || 'Sans nom', d: m.d || '', g: typeof m.g === 'string' ? m.g.trim() : '', approx: !!m.approx, src: m.src || '', v: (m.v && typeof m.v === 'object') ? m.v : null, l: (m.l && typeof m.l === 'object') ? m.l : null, i: parseInfo(m.i), ch: Array.isArray(m.ch) && m.ch.length ? m.ch : null, mk: null, on: false };
       computeAmount(o);
       o.sec = security(o);
       if (o.amt > 0) has.amt = true;
@@ -324,7 +324,7 @@
     }
     var o = store.get('opts', null);
     if (o && typeof o === 'object') {
-      opt.amt = o.amt !== false; opt.size = !!o.size; opt.zones = o.zones !== false; opt.grid = !!o.grid;
+      opt.amt = o.amt !== false; opt.size = !!o.size; opt.zones = o.zones !== false; opt.grid = !!o.grid; opt.chap = o.chap !== false;
       if (o.zk && typeof o.zk === 'object') opt.zk = o.zk;
     }
     if (!has.amt) F.min = 0;
@@ -1468,7 +1468,7 @@
     var me = store.get('me', null);
     var h = routeStrip(m) +
       '<div class="shd" style="--c:' + esc(c.color) + '"><span class="bigdot">' + ICONS.use(c.icon) + '</span><div class="sht"><h2>' + esc(m.n) + '</h2>' +
-      '<div class="shm"><span class="pill"><i></i>' + esc(c.n) + '</span><span class="zn">' + ICONS.use('ui_me') + esc(zoneOf(m)) + '</span>' + gameBadge(m) + '</div></div>' +
+      '<div class="shm"><span class="pill"><i></i>' + esc(c.n) + '</span><span class="zn">' + ICONS.use('ui_me') + esc(zoneOf(m)) + '</span>' + gameBadge(m) + (m.ch ? '<span class="chapbadge">Planque du chapitre ' + m.ch.join(' et ') + '</span>' : '') + '</div></div>' +
       moneyBadges(m) + secLine(m) + '</div>' +
       (m.g ? '<div class="howto"><span class="hti">' + ICONS.use('ui_compass') + '</span><div><b>Comment le trouver dans le jeu</b><p>' + esc(m.g) + '</p></div></div>' : '') +
       infoBlock(m) + moneyNote(m);
@@ -1769,6 +1769,26 @@
   }
 
   /* ---------- Démarrage ---------- */
+  // Planques de Jason & Lucia par chapitre : étiquettes « Ch. N » toujours visibles + trajet en pointillés
+  var chapLayer = null;
+  function drawChapters() {
+    var hs = markers.filter(function (m) { return m.ch; }).sort(function (a, b) { return Math.min.apply(null, a.ch) - Math.min.apply(null, b.ch); });
+    var row = $('chapRow'); if (row) row.hidden = !hs.length;
+    if (!hs.length) return;
+    chapLayer = L.layerGroup();
+    L.polyline(hs.map(function (m) { return [m.y, m.x]; }), { pane: 'routenum', color: '#ff2e97', weight: 2.5, opacity: 0.75, dashArray: '6 7', interactive: false }).addTo(chapLayer);
+    hs.forEach(function (m) {
+      var short = m.n.replace(/\s*\(.*\)\s*$/, '');
+      var mk = L.marker([m.y, m.x], { pane: 'routenum', keyboard: false, title: m.n,
+        icon: L.divIcon({ className: 'chapmk', html: '<b>CH.\u00a0' + m.ch.join('–') + '</b><span>' + esc(short) + '</span>', iconSize: [0, 0] }) });
+      mk.on('click', function () { openSheet(m, true); });
+      mk.addTo(chapLayer);
+    });
+    if (opt.chap) chapLayer.addTo(map);
+    var c = $('optChap');
+    if (c) { c.checked = opt.chap; c.addEventListener('change', function () { opt.chap = c.checked; saveOpts(); if (opt.chap) chapLayer.addTo(map); else map.removeLayer(chapLayer); }); }
+  }
+
   function start() {
     $('loader').classList.remove('err', 'hide');
     $('btnRetry').hidden = true;
@@ -1783,6 +1803,7 @@
       document.body.classList.toggle('ps', psMode);
       initMap();
       buildPanel();
+      try { drawChapters(); } catch (e) { /* calque facultatif */ }
       bindUI();
       drawMe();
       applyVisibility();
