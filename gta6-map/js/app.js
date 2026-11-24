@@ -5,8 +5,8 @@
   var ICONS = window.GTA6_ICONS;
   var $ = function (id) { return document.getElementById(id); };
   // fichiers de données : les 2 premiers sont obligatoires, les autres optionnels (absents = fonction masquée)
-  var DATA_FILES = ['markers', 'categories', 'groups', 'land', 'labels', 'roads', 'routes', 'zones', 'landuse', 'anchors', 'blips'];
-  var OPTIONAL = { groups: [], land: null, labels: [], roads: [], routes: [], zones: [], landuse: null, anchors: [], blips: null };
+  var DATA_FILES = ['markers', 'categories', 'groups', 'land', 'labels', 'roads', 'routes', 'zones', 'landuse', 'anchors', 'blips', 'buildings'];
+  var OPTIONAL = { groups: [], land: null, labels: [], roads: [], routes: [], zones: [], landuse: null, anchors: [], blips: null, buildings: [] };
   var MIN_Z = -6, MAX_Z = 2;
   var AMT_Z = -0.5;          // zoom à partir duquel les montants s'affichent sous les icônes
 
@@ -392,6 +392,25 @@
     bm = window.GTA6_BASEMAP.create(map, { land: D.land, landuse: D.landuse, roads: D.roads }, { theme: theme, tints: neonTints() });
     bm.addTo();
     if (opt.grid) bm.setGrid(true);
+    try { drawBuildings(); } catch (e) { /* calque facultatif */ }
+  }
+  // Bâtiments repères (gtadb CC BY 4.0 + marqueurs) : petits blocs visibles au zoom quartier
+  var BLDG_COL = { villa: '#d9c7a3', house: '#cfc6b8', tower: '#9fb0c8', store: '#c9b8d8', bank: '#e6c46a', warehouse: '#b7b2a6', hotel: '#d7a9b9', landmark: '#f0a96b', other: '#c3c9d4' };
+  function drawBuildings() {
+    var B = Array.isArray(D.buildings) ? D.buildings : [];
+    if (!B.length) return;
+    var rnd = L.canvas({ pane: 'bldg', padding: 0.2 });
+    var lay = L.layerGroup();
+    B.forEach(function (b) {
+      if (typeof b.x !== 'number' || typeof b.y !== 'number') return;
+      var h = Math.max(6, Math.min(60, (b.s || 18))) / 2;
+      var r = L.rectangle([[b.y - h, b.x - h], [b.y + h, b.x + h]], { renderer: rnd, stroke: true, weight: 0.6, color: 'rgba(40,50,70,.45)',
+        fillColor: BLDG_COL[b.k] || BLDG_COL.other, fillOpacity: 0.9, interactive: !!b.n, bubblingMouseEvents: false });
+      if (b.n) r.on('click', function () { toast(b.n); });
+      r.addTo(lay);
+    });
+    function upd() { var on = map.getZoom() >= -1.5; if (on && !map.hasLayer(lay)) lay.addTo(map); else if (!on && map.hasLayer(lay)) map.removeLayer(lay); }
+    map.on('zoomend', upd); upd();
   }
 
   /* ---------- Carte ---------- */
@@ -418,6 +437,7 @@
     map.attributionControl.setPrefix(false);
     map.attributionControl.addAttribution('Données : gta6map.io, gtabase.com, gta6info.app, gameta.gg, gtadb.org (<a href="https://creativecommons.org/licenses/by/4.0/deed.fr" target="_blank" rel="noopener">CC BY 4.0</a>) · carte non officielle, fond dessiné · <a href="https://leafletjs.com" target="_blank" rel="noopener">Leaflet</a>');
     map.createPane('base').style.zIndex = 300;     // fond dessiné (grille, terre)
+    map.createPane('bldg').style.zIndex = 330;     // bâtiments repères (petits blocs)
     map.createPane('mybg').style.zIndex = 350;     // « Mon fond de carte » (captures de l'utilisateur)
     map.createPane('mybgline').style.zIndex = 360; // contours de contrôle pendant le calage
     map.createPane('zones').style.zIndex = 380;    // halos des zones rentables
