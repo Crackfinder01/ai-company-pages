@@ -3092,6 +3092,7 @@
   }
   // proposé une fois à l'ouverture, s'il n'y a encore aucune capture
   function wizOffer() {
+    return; // désactivé : la proposition automatique de l'assistant était prise pour une demande de « deuxième photo »
     if (items.length || X.store.get('mbwOffer', false) || (navigator.webdriver && !window.__MBW_OFFER)) return;
     var tries = 0;
     var go = function () {
@@ -3299,8 +3300,8 @@
     var c = $('mblCard'), h = '', s = loc.tf ? scaleOf(loc.tf) : 0;
     if (loc.step >= 0) {
       var r = loc.refs[loc.step];
-      h = '<p>Étape ' + (loc.step + 1) + ' sur 2 : touche sur ta photo <b>l\'icône ' + X.esc(r.n) + '</b>' + (r.dist ? ' (le point est à ~' + r.dist + ' m ' + (/^[aeiou]/.test(r.dir) ? 'à l\'' : 'au ') + r.dir + ' de cette icône)' : '') +
-        '. Zoome avec deux doigts si besoin.</p>' + (loc.step === 0 && !loc.tf ? '<p class="mid">Tu ne vois pas cette icône ? Ta photo est sans doute trop dézoomée : sur la PS5, zoome jusqu\'à voir les icônes des magasins autour du point, puis reprends la photo.</p>' : '') +
+      h = '<p>Pas besoin d\'une autre photo. Sur <b>cette</b> photo, touche <b>l\'icône ' + X.esc(r.n) + '</b>' + (r.dist ? ' (le point est à ~' + r.dist + ' m ' + (/^[aeiou]/.test(r.dir) ? 'à l\'' : 'au ') + r.dir + ' de cette icône)' : '') +
+        ' — icône ' + (loc.step + 1) + ' sur 2. Zoome avec deux doigts si besoin.</p>' + (loc.step === 0 && !loc.tf ? '<p class="mid">Tu ne vois pas cette icône ? Ta photo est sans doute trop dézoomée : sur la PS5, zoome jusqu\'à voir les icônes des magasins autour du point, puis reprends la photo.</p>' : '') +
         '<div class="rowbtns"><button type="button" class="btn" id="mblCancel">' + ICONS.use('ui_undo') + 'Annuler</button>' + '<button type="button" class="btn" id="mblRetake">' + ICONS.use('ui_image') + 'Reprendre une photo</button>' + '</div>';
     } else if (loc.tf) {
       var acc = Math.max(5, Math.round(loc.sig / 5) * 5);
