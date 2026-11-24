@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Audit blanc Qualiopi V10 : la liste de vos écarts à partir de vos documents</title>
+<meta name="description" content="Projet indépendant en préparation : envoyez vos documents, recevez un rapport d'écarts par rapport au référentiel Qualiopi V10. Prix envisagé : 149 euros.">
+<meta name="robots" content="noindex">
+<style>
+ body{font-family:system-ui,Arial,sans-serif;margin:0;color:#1d2733;background:#f6f8fa;line-height:1.55}
+ main{max-width:720px;margin:0 auto;padding:24px 18px 60px}
+ .banner{background:#fff4d6;border:1px solid #e8c66a;padding:10px 14px;border-radius:8px;font-size:.95rem}
+ h1{font-size:1.8rem;line-height:1.2;margin:24px 0 10px}
+ h2{font-size:1.25rem;margin-top:32px}
+ .price{background:#fff;border:1px solid #d0d7de;border-radius:10px;padding:16px;margin:18px 0}
+ .price strong{font-size:1.6rem}
+ .mock{background:#fff;border:1px dashed #8a949e;border-radius:10px;padding:12px 16px;font-size:.92rem}
+ .cta{display:inline-block;background:#0b5cad;color:#fff;border:0;border-radius:8px;padding:14px 26px;font-size:1.1rem;cursor:pointer}
+ .cta:hover{background:#084a8c}
+ .thanks{display:none;background:#e6f5ea;border:1px solid #8fcf9f;border-radius:10px;padding:18px;margin-top:18px}
+ ul{padding-left:20px}
+ small,.small{color:#58626d;font-size:.85rem}
+ footer{margin-top:40px;border-top:1px solid #d0d7de;padding-top:14px}
+</style>
+</head>
+<body>
+<!-- Compteur de visites : Cloudflare Web Analytics (sans cookie, sans donnée personnelle, compte Cloudflare de Thibaut). -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "12b0586ec92542acb023e64d7f75623d", "spa": true}'></script>
+<main>
+<div class="banner"><strong>Produit en préparation.</strong> Il n'existe pas encore. Rien ne peut être acheté sur cette page et nous ne collectons aucune donnée personnelle. Nous mesurons seulement l'intérêt.</div>
+<h1>Audit blanc Qualiopi V10 : la liste des écarts de votre dossier, à partir de vos documents</h1>
+<p>Pour les petits organismes de formation déjà certifiés ou en préparation : nous prévoyons de comparer vos documents (programmes, questionnaires, procédures) au référentiel Qualiopi mis à jour, et de vous rendre un rapport d'écarts.</p>
+
+<h2>Le problème</h2>
+<p>Le référentiel Qualiopi change : décret n° 2026-728, en vigueur depuis le 1er novembre 2026 (source : <a href="https://certiforma.fr/decret-qualiopi-2026-728-33-indicateurs/" rel="noopener">certiforma.fr</a>, à vérifier sur Légifrance). Beaucoup de kits et de modèles datent de l'ancienne version. Un audit blanc fait par une personne coûte plusieurs centaines d'euros (par exemple 690 € HT chez un cabinet, <a href="https://certiforma.fr/audit-blanc-qualiopi/" rel="noopener">certiforma.fr</a>), et un diagnostic gratuit en ligne n'examine pas vos documents.</p>
+
+<h2>Ce que nous prévoyons de construire</h2>
+<ul>
+ <li>Vous envoyez vos documents.</li>
+ <li>Un outil les compare aux indicateurs du référentiel V10 et à son guide de lecture.</li>
+ <li>Vous recevez un rapport : indicateurs couverts, écarts, pièces manquantes, par ordre de priorité. Délai visé : 24 heures (objectif, pas un engagement tant que le produit n'existe pas).</li>
+ <li>Nous indiquons quels modèles de documents il vous manque. Nous ne fabriquons jamais de preuve et n'antidatons rien.</li>
+</ul>
+<p class="small">Ce service ne remplace pas l'audit de certification et ne garantit pas son résultat. Ce projet est indépendant : il n'est pas lié à l'administration, à France compétences ni à un organisme certificateur.</p>
+
+<h2>Maquette illustrative</h2>
+<div class="mock">
+ <strong>Maquette d'un extrait de rapport, organisme fictif. Aucun outil n'a produit ce texte.</strong><br>
+ Indicateur (exemple) : information du public sur les délais d'accès. Constat : le programme ne mentionne pas de délai. Action proposée : ajouter une mention de délai d'accès.
+</div>
+
+<div class="price">
+ <p>Prix envisagé : <strong>149 €</strong> par dossier, paiement unique. Pas d'abonnement.<br>
+ <span class="small">Ce prix est une hypothèse à tester. Aucun paiement n'est possible aujourd'hui.</span></p>
+ <button class="cta" type="button" onclick="want()">Je le veux</button>
+</div>
+
+<div class="thanks" id="thanks-fr" role="status">
+ <strong>Merci, votre intérêt est noté.</strong><br>
+ Votre clic a été compté, c'est tout : nous n'avons enregistré ni votre nom ni votre adresse e-mail, et aucun paiement n'a eu lieu. Le produit n'est pas encore disponible.
+</div>
+
+<footer class="small">
+ Cette page ne contient aucun cookie ni formulaire. Les visites et les clics sont comptés par un compteur sans cookie (Cloudflare Web Analytics), sans donnée personnelle.
+</footer>
+</main>
+<script>
+ var clicked = false;
+ function want(){
+  document.getElementById('thanks-fr').style.display = 'block';
+  if(!clicked){
+   clicked = true;
+   // Compte un clic (sans donnée personnelle) : une « page vue » merci-fr dans Cloudflare Web Analytics.
+   try { history.pushState({}, '', 'merci-fr'); } catch(e) {}
+  }
+ }
+</script>
+</body>
+</html>
