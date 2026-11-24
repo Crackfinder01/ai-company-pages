@@ -44,6 +44,19 @@
   </div>
 
   <div id="modeHint" class="hint" hidden></div>
+  <button id="filtPill" class="fpill" type="button" hidden><span data-ic="ui_filter"></span><span id="filtPillTxt"></span><span data-ic="ui_close"></span></button>
+
+  <!-- Légende -->
+  <div id="legend" class="legend">
+    <button id="btnLegend" class="lgbtn" type="button" aria-expanded="false" aria-controls="legendBox"><span data-ic="ui_legend"></span>Légende</button>
+    <div id="legendBox" class="lgbox" hidden></div>
+  </div>
+
+  <!-- Tournée en cours (fiche fermée) -->
+  <div id="routePill" class="rpill" hidden>
+    <button id="rpResume" type="button" class="rp-go"><span data-ic="ui_route"></span><span id="rpTxt"></span></button>
+    <button id="rpQuit" type="button" class="iconbtn small" aria-label="Quitter la tournée"><span data-ic="ui_close"></span></button>
+  </div>
 
   <!-- Panneau calques -->
   <div id="scrim" hidden></div>
@@ -52,7 +65,13 @@
       <h2 class="brand">CARTE <b>GTA 6</b><small>Leonida</small></h2>
       <button id="btnPanelClose" class="iconbtn" type="button" aria-label="Fermer les calques"><span data-ic="ui_close"></span></button>
     </div>
+    <div class="tabs" role="tablist" aria-label="Sections">
+      <button type="button" role="tab" id="tabLayers" data-tab="layers" aria-selected="true"><span data-ic="ui_layers"></span>Calques</button>
+      <button type="button" role="tab" id="tabRoutes" data-tab="routes" aria-selected="false" hidden><span data-ic="ui_route"></span>Tournées</button>
+      <button type="button" role="tab" id="tabStats" data-tab="stats" aria-selected="false"><span data-ic="ui_stats"></span>Stats</button>
+    </div>
     <div class="pbody">
+      <div class="tabp" data-tab="layers" role="tabpanel" aria-labelledby="tabLayers">
       <section class="psec">
         <h3>Préréglages rapides</h3>
         <div id="presets" class="chips"></div>
@@ -64,6 +83,49 @@
           <span>Masquer les points déjà faits</span>
         </label>
         <p id="visibleCount" class="muted small"></p>
+      </section>
+      <section class="psec" id="filtSec">
+        <h3>Filtres <button id="filtReset" class="hlink" type="button" hidden>Tout réinitialiser</button></h3>
+        <div class="frow" id="amtRow" hidden>
+          <div class="flbl"><span data-ic="ui_coin"></span>Montant minimum <output id="minAmtOut">Tous</output></div>
+          <input id="minAmt" class="slider" type="range" min="0" max="8" step="1" value="0" aria-label="Montant minimum">
+          <div class="ticks" aria-hidden="true"><span style="left:0%">0</span><span style="left:25%">1 k$</span><span style="left:62.5%">10 k$</span><span style="left:100%">100 k$</span></div>
+        </div>
+        <div class="frow" id="diffRow" hidden>
+          <div class="flbl"><span data-ic="ui_gauge"></span>Difficulté</div>
+          <div class="chips sm" id="diffChips"></div>
+        </div>
+        <div class="frow" id="secRow" hidden>
+          <div class="flbl"><span data-ic="car"></span>Véhicules faciles à voler</div>
+          <div class="chips sm" id="secChips"></div>
+        </div>
+        <p id="filtNote" class="muted small" hidden></p>
+      </section>
+      <section class="psec">
+        <h3>Calques</h3>
+        <div id="groups"></div>
+      </section>
+      <section class="psec" id="zoneSec" hidden>
+        <h3>Zones rentables</h3>
+        <label class="switch">
+          <input id="optZones" type="checkbox">
+          <span class="sw"></span>
+          <span>Halos des zones qui rapportent le plus</span>
+        </label>
+        <div class="chips sm" id="zoneKinds"></div>
+      </section>
+      <section class="psec" id="dispSec">
+        <h3>Affichage</h3>
+        <label class="switch">
+          <input id="optAmt" type="checkbox">
+          <span class="sw"></span>
+          <span>Montants sous les icônes (en zoomant)</span>
+        </label>
+        <label class="switch">
+          <input id="optSize" type="checkbox">
+          <span class="sw"></span>
+          <span>Taille des icônes selon la valeur</span>
+        </label>
       </section>
       <section class="psec" id="favSec" hidden>
         <h3>Mes favoris</h3>
@@ -79,14 +141,18 @@
         <button id="mybgHelp" class="btn ghost wide" type="button"><span data-ic="ui_help"></span>Comment faire ? (4 étapes)</button>
         <p id="mybgNote" class="warn small" hidden></p>
       </section>
-      <section class="psec">
-        <h3>Calques</h3>
-        <div id="groups"></div>
-      </section>
       <section class="psec about">
-        <p class="muted small">Carte non officielle, dessinée pour l'app. Positions issues de la communauté : certaines sont approximatives (contour en pointillé). Appui long sur la carte = poser « Je suis ici ».</p>
+        <p class="muted small">Carte non officielle, dessinée pour l'app. Positions issues de la communauté : certaines sont approximatives (contour en pointillé). Montants indicatifs. Appui long sur la carte = poser « Je suis ici ».</p>
         <button id="btnResetProgress" class="btn ghost danger" type="button">Remettre à zéro ma progression</button>
       </section>
+      </div>
+      <div class="tabp" data-tab="routes" role="tabpanel" aria-labelledby="tabRoutes" hidden>
+        <p class="muted small tabintro">Des circuits prêts à suivre : touche une tournée pour la tracer sur la carte, puis avance point par point.</p>
+        <div id="routeList" class="rlist"></div>
+      </div>
+      <div class="tabp" data-tab="stats" role="tabpanel" aria-labelledby="tabStats" hidden>
+        <div id="statsBody"></div>
+      </div>
     </div>
   </aside>
 

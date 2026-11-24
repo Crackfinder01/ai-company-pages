@@ -4,8 +4,11 @@
 
   var ICONS = window.GTA6_ICONS;
   var $ = function (id) { return document.getElementById(id); };
-  var DATA_FILES = ['markers', 'categories', 'groups', 'land', 'labels', 'roads'];
+  // fichiers de données : les 2 premiers sont obligatoires, les autres optionnels (absents = fonction masquée)
+  var DATA_FILES = ['markers', 'categories', 'groups', 'land', 'labels', 'roads', 'routes', 'zones'];
+  var OPTIONAL = { groups: [], land: null, labels: [], roads: [], routes: [], zones: [] };
   var MIN_Z = -6, MAX_Z = 2;
+  var AMT_Z = -0.5;          // zoom à partir duquel les montants s'affichent sous les icônes
 
   // Préréglages : listes d'id de catégories et/ou groupes entiers. Les id absents des données sont ignorés.
   // Une catégorie peut aussi déclarer "presets": ["braquer", ...] dans categories.json.
@@ -18,6 +21,46 @@
     { id: 'tout', n: 'Tout', all: true }
   ];
   var DEFAULT_PRESETS = ['braquer', 'voitures'];
+
+  // Prérequis (champ i.req) : code -> [icône, libellé FR]
+  var REQ = {
+    'key-cloner': ['rq_keyclone', 'Cloneur de clés'],
+    'perceuse': ['rq_drill', 'Perceuse'],
+    'chalumeau': ['rq_torch', 'Chalumeau'],
+    'brouilleur': ['rq_jammer', 'Brouilleur'],
+    'piratage': ['rq_hack', 'Piratage'],
+    'arme': ['rq_gun', 'Arme'],
+    'explosifs': ['rq_bomb', 'Explosifs'],
+    'masque': ['mask', 'Masque'],
+    'vehicule-rapide': ['rq_fast', 'Véhicule rapide'],
+    'moto': ['rq_moto', 'Moto'],
+    'bateau': ['boat', 'Bateau'],
+    'avion': ['plane', 'Avion'],
+    'helico': ['rq_heli', 'Hélico'],
+    'plongee': ['rq_dive', 'Plongée'],
+    'nuit': ['rq_moon', 'De nuit'],
+    'jour': ['rq_sun', 'De jour'],
+    'mission': ['rq_mission', 'Mission à faire avant'],
+    'equipe': ['rq_team', 'En équipe'],
+    'receleur': ['rq_fence', 'Receleur'],
+    'telephone-waink': ['rq_waink', 'Appli WAiNK']
+  };
+  var DIFF = { 1: 'Facile', 2: 'Moyen', 3: 'Difficile' };
+  // Paliers de montant (couleur des étiquettes / taille des icônes)
+  var TIERS = [
+    { max: 1000, c: '#9fb4ff', n: 'moins de 1 k$' },
+    { max: 5000, c: '#4dffa6', n: '1 à 5 k$' },
+    { max: 25000, c: '#ffe14d', n: '5 à 25 k$' },
+    { max: 100000, c: '#ff9f1c', n: '25 à 100 k$' },
+    { max: Infinity, c: '#ff2e97', n: '100 k$ et plus' }
+  ];
+  var MIN_STEPS = [0, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000];
+  var KINDS = {
+    braquage: { n: 'Braquages', c: '#ff3d71', rgb: '255,61,113', icon: 'mask' },
+    vehicules: { n: 'Véhicules', c: '#22e6ff', rgb: '34,230,255', icon: 'car' },
+    butin: { n: 'Butin', c: '#ffd23f', rgb: '255,210,63', icon: 'moneybag' }
+  };
+  var KIND_OTHER = { n: 'Autres', c: '#b48cff', rgb: '180,140,255', icon: 'moneybag' };
 
   /* ---------- Stockage sûr (localStorage peut être interdit : iframe sandbox, navigation privée) ---------- */
   var mem = {};
@@ -46,11 +89,28 @@
     try { s = s.normalize('NFD').replace(/[̀-ͯ]/g, ''); } catch (e) { /* vieux navigateur */ }
     return s.replace(/[''`]/g, "'");
   }
-  function fmtInt(n) { return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' '); }
+  function fmtInt(n) { return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' '); }
   function fmtDist(u) {
     if (u < 1000) return '≈ ' + (Math.round(u / 10) * 10) + ' m';
     return '≈ ' + (Math.round(u / 100) / 10).toFixed(1).replace('.', ',') + ' km';
   }
+  function fmtKm(u) { return u < 1000 ? (Math.round(u / 10) * 10) + ' m' : (Math.round(u / 100) / 10).toFixed(1).replace('.', ',') + ' km'; }
+  // montant compact : 850 $, 4,2 k$, 135 k$, 1,2 M$
+  function fmtK(n) {
+    if (!(n > 0)) return '0 $';
+    if (n < 1000) return Math.round(n) + ' $';
+    if (n < 10000) return (Math.round(n / 100) / 10).toFixed(1).replace('.0', '').replace('.', ',') + ' k$';
+    if (n < 1e6) return Math.round(n / 1000) + ' k$';
+    return (Math.round(n / 1e5) / 10).toFixed(1).replace('.0', '').replace('.', ',') + ' M$';
+  }
+  function fmtRangeK(a, b) {
+    if (!(a > 0) || !(b > 0)) return fmtK(b || a);
+    var A = fmtK(a), B = fmtK(b);
+    if (A === B) return B;
+    var ua = A.split('\u00a0')[1], ub = B.split('\u00a0')[1];
+    return (ua === ub ? A.split('\u00a0')[0] : A) + ' – ' + B;
+  }
+  function tierOf(n) { for (var i = 0; i < TIERS.length; i++) { if (n < TIERS[i].max) return i; } return TIERS.length - 1; }
   function debounce(fn, ms) {
     var t; return function () { var a = arguments, self = this; clearTimeout(t); t = setTimeout(function () { fn.apply(self, a); }, ms); };
   }
@@ -64,6 +124,7 @@
     for (var i = 0; i < els.length; i++) { if (!els[i].firstChild) els[i].innerHTML = ICONS.use(els[i].getAttribute('data-ic')); }
   }
   function isWide() { return window.matchMedia && window.matchMedia('(min-width: 900px)').matches; }
+  function kindOf(k) { return KINDS[k] || KIND_OTHER; }
 
   /* ---------- État ---------- */
   var D = {};               // données brutes
@@ -78,6 +139,13 @@
   var map, cluster, labelLayer, labelItems = [], meMarker = null, meLine = null;
   var selected = null, placingMe = false;
   var iconCache = {};
+  var routes = [], zones = [];
+  var F = { min: 0, diff: {}, notrack: false, unlocked: false };   // filtres
+  var opt = { amt: true, size: false, zones: true, zk: {} };         // options d'affichage
+  var has = { amt: false, diff: false, notrack: false, unlocked: false };
+  var zoneLayer = null, zoneRenderer = null;
+  var route = null;         // tournée en cours : { r, pts, idx, line, glow, nums }
+  var landStyles = null;    // styles du fond dépendant du zoom
 
   /* ---------- Chargement des données ---------- */
   function fetchJSON(name) {
@@ -101,9 +169,8 @@
     var opaque = false;
     try { opaque = window.origin === 'null' || location.protocol === 'file:'; } catch (e) { opaque = true; }
     if (opaque) return loadBundle();
-    var opt = { groups: [], land: null, labels: [], roads: [] };
     var p = typeof fetch === 'function' ? Promise.all(DATA_FILES.map(function (n) {
-      return fetchJSON(n).catch(function (e) { if (n in opt) return opt[n]; throw e; });
+      return fetchJSON(n).catch(function (e) { if (n in OPTIONAL) return OPTIONAL[n]; throw e; });
     })).then(function (arr) {
       var o = {}; DATA_FILES.forEach(function (n, i) { o[n] = arr[i]; }); return o;
     }) : Promise.reject(new Error('fetch indisponible'));
@@ -117,6 +184,61 @@
   }
 
   /* ---------- Préparation ---------- */
+  function num(v) { return typeof v === 'number' && isFinite(v) ? v : (typeof v === 'string' && v.trim() !== '' && isFinite(+v) ? +v : null); }
+  function parseInfo(i) {
+    if (!i || typeof i !== 'object') return null;
+    var o = {}, n = 0;
+    var d = num(i.diff); if (d !== null && d >= 1 && d <= 3) { o.diff = Math.round(d); n++; }
+    var w = num(i.wanted); if (w !== null && w >= 0 && w <= 5) { o.wanted = Math.round(w); n++; }
+    if (Array.isArray(i.req)) {
+      o.req = i.req.filter(function (r, k, a) { return typeof r === 'string' && r && a.indexOf(r) === k; });
+      if (o.req.length) n++; else delete o.req;
+    }
+    var c = num(i.chap); if (c !== null && c > 0) { o.chap = Math.round(c); n++; }
+    if (typeof i.time === 'string' && i.time.trim()) { o.time = i.time.trim(); n++; }
+    if (Array.isArray(i.tips)) {
+      o.tips = i.tips.filter(function (t) { return typeof t === 'string' && t.trim(); }).slice(0, 5);
+      if (o.tips.length) n++; else delete o.tips;
+    }
+    if (typeof i.tracker === 'boolean') o.tracker = i.tracker;
+    if (typeof i.locked === 'boolean') o.locked = i.locked;
+    return n || 'tracker' in o || 'locked' in o ? o : null;
+  }
+  // gain d'un point (butin, revente, récompense, paie) : jamais les prix/coûts
+  function computeAmount(o) {
+    var l = o.l, v = o.v;
+    o.amt = 0; o.amtLo = 0; o.amtHi = 0; o.amtEst = false;
+    if (l && l.kind !== 'price' && (l.min > 0 || l.max > 0)) {
+      o.amtLo = l.min > 0 ? l.min : l.max; o.amtHi = l.max > 0 ? l.max : l.min;
+      if (l.min > 0 && !(l.max > 0)) o.amtHi = l.min;
+      o.amt = (o.amtLo + o.amtHi) / 2; o.amtEst = o.amtLo !== o.amtHi;
+    }
+    if (v) {
+      var r = v.pay > 0 ? v.pay : v.sell > 0 ? v.sell : 0;
+      if (r > o.amt) { o.amt = r; o.amtLo = o.amtHi = r; o.amtEst = false; }
+    }
+    if (o.amt > 0) {
+      o.tier = tierOf(o.amt);
+      o.amtLbl = (o.amtEst ? '~' : '') + fmtK(o.amt);
+    } else { o.tier = -1; o.amtLbl = ''; }
+  }
+  // sécurité d'un véhicule : champ i.tracker / i.locked, sinon déduite de la description
+  function security(o) {
+    var s = { notrack: null, unlocked: null };
+    if (o.i && typeof o.i.tracker === 'boolean') s.notrack = !o.i.tracker;
+    if (o.i && typeof o.i.locked === 'boolean') s.unlocked = !o.i.locked;
+    var d = norm(o.d);
+    if (s.notrack === null) {
+      if (/sans traceur|ni traceur|aucun traceur/.test(d)) s.notrack = true;
+      else if (/traceur (standard|avance)|avec traceur|et traceur|mais avec traceur/.test(d)) s.notrack = false;
+    }
+    if (s.unlocked === null) {
+      if (/non verrouill|pas verrouill|deverrouill/.test(d)) s.unlocked = true;
+      else if (/verrouill|key cloner requis/.test(d)) s.unlocked = false;
+    }
+    return s;
+  }
+
   function prepare(data) {
     if (!data || !Array.isArray(data.markers) || !data.markers.length || !Array.isArray(data.categories) || !data.categories.length) {
       throw new Error('donnees');
@@ -137,9 +259,15 @@
         cats[m.c] = { id: m.c, g: 'autres', n: String(m.c || 'Autres'), color: '#cccccc', icon: 'pin', hidden: false, presets: [], list: [], ndone: 0 };
         catOrder.push(m.c);
       }
-      var o = { id: String(m.id), c: m.c, x: m.x, y: m.y, n: m.n || 'Sans nom', d: m.d || '', g: typeof m.g === 'string' ? m.g.trim() : '', approx: !!m.approx, src: m.src || '', v: (m.v && typeof m.v === 'object') ? m.v : null, l: (m.l && typeof m.l === 'object') ? m.l : null, mk: null, on: false };
+      var o = { id: String(m.id), c: m.c, x: m.x, y: m.y, n: m.n || 'Sans nom', d: m.d || '', g: typeof m.g === 'string' ? m.g.trim() : '', approx: !!m.approx, src: m.src || '', v: (m.v && typeof m.v === 'object') ? m.v : null, l: (m.l && typeof m.l === 'object') ? m.l : null, i: parseInfo(m.i), mk: null, on: false };
+      computeAmount(o);
+      o.sec = security(o);
+      if (o.amt > 0) has.amt = true;
+      if (o.i && o.i.diff) has.diff = true;
+      if (o.sec.notrack !== null) has.notrack = true;
+      if (o.sec.unlocked !== null) has.unlocked = true;
       o.key = norm(o.n);
-      o.full = o.key + ' ' + norm(o.d) + ' ' + norm(o.g) + ' ' + norm(cats[m.c].n);
+      o.full = o.key + ' ' + norm(o.d) + ' ' + norm(o.g) + ' ' + norm(cats[m.c].n) + (o.i && o.i.tips ? ' ' + norm(o.i.tips.join(' ')) : '');
       markers.push(o); byId[o.id] = o; cats[m.c].list.push(o);
     });
     catOrder.forEach(function (id) {
@@ -151,6 +279,23 @@
     groups = gList.map(function (g) { return gIdx[g.id]; }).filter(function (g) { return g && g.cats.length; });
     // labels
     D.labels = (Array.isArray(data.labels) ? data.labels : []).filter(function (l) { return l && l.n && isFinite(l.x) && isFinite(l.y); });
+    // tournées et zones (optionnelles)
+    routes = (Array.isArray(data.routes) ? data.routes : []).map(function (r, k) {
+      if (!r || !Array.isArray(r.ids)) return null;
+      var pts = r.ids.map(function (id) { return byId[String(id)]; }).filter(Boolean);
+      if (!pts.length) return null;
+      var lo = num(r.total_min), hi = num(r.total_max);
+      if (lo === null && hi === null) { lo = 0; hi = 0; pts.forEach(function (m) { lo += m.amtLo; hi += m.amtHi; }); }
+      var dist = num(r.dist_m);
+      if (dist === null) { dist = 0; for (var i = 1; i < pts.length; i++) dist += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y); }
+      return { id: String(r.id != null ? r.id : 'r' + k), n: r.n || 'Tournée ' + (k + 1), zone: r.zone || '', kind: r.kind || '', pts: pts, lo: lo || 0, hi: hi || lo || 0, dist: dist, note: typeof r.note === 'string' ? r.note : '' };
+    }).filter(Boolean);
+    zones = (Array.isArray(data.zones) ? data.zones : []).filter(function (z) {
+      return z && isFinite(z.x) && isFinite(z.y) && num(z.r) > 0;
+    }).map(function (z) {
+      var sc = num(z.score); sc = sc === null ? 0.5 : Math.max(0, Math.min(1, sc));
+      return { n: z.n || 'Zone', x: z.x, y: z.y, r: num(z.r), score: sc, kind: z.kind || '', lo: num(z.total_min) || 0, hi: num(z.total_max) || num(z.total_min) || 0, count: num(z.count) || 0 };
+    }).sort(function (a, b) { return a.score - b.score; });   // les plus rentables dessinées au-dessus
     // progression mémorisée
     (store.get('done', []) || []).forEach(function (id) { if (byId[id]) { done[id] = true; cats[byId[id].c].ndone++; } });
     (store.get('fav', []) || []).forEach(function (id) { if (byId[id]) fav[id] = true; });
@@ -158,6 +303,22 @@
     var vis = store.get('vis', null);
     if (Array.isArray(vis)) vis.forEach(function (id) { if (cats[id]) visible[id] = true; });
     else DEFAULT_PRESETS.forEach(function (p) { presetCats(p).forEach(function (id) { visible[id] = true; }); });
+    // filtres et options mémorisés
+    var f = store.get('filters', null);
+    if (f && typeof f === 'object') {
+      F.min = MIN_STEPS.indexOf(f.min) >= 0 ? f.min : 0;
+      if (f.diff && typeof f.diff === 'object') Object.keys(f.diff).forEach(function (k) { if (DIFF[k] && f.diff[k]) F.diff[k] = true; });
+      F.notrack = !!f.notrack; F.unlocked = !!f.unlocked;
+    }
+    var o = store.get('opts', null);
+    if (o && typeof o === 'object') {
+      opt.amt = o.amt !== false; opt.size = !!o.size; opt.zones = o.zones !== false;
+      if (o.zk && typeof o.zk === 'object') opt.zk = o.zk;
+    }
+    if (!has.amt) F.min = 0;
+    if (!has.diff) F.diff = {};
+    if (!has.notrack) F.notrack = false;
+    if (!has.unlocked) F.unlocked = false;
   }
 
   function presetCats(pid) {
@@ -170,6 +331,105 @@
       if ((p.all && !c.hidden) || (p.cats && p.cats.indexOf(id) >= 0) || (p.groups && p.groups.indexOf(c.g) >= 0) || c.presets.indexOf(pid) >= 0) out.push(id);
     });
     return out;
+  }
+
+  /* ---------- Fond dessiné ---------- */
+  // Rendu canvas avec effets : ombre portée, composition (« source-atop » = peindre seulement sur la terre), dégradé radial
+  var FxCanvas = L.Canvas.extend({
+    _fillStroke: function (ctx, layer) {
+      var o = layer.options, fx = o.fx;
+      if (!fx) { L.Canvas.prototype._fillStroke.call(this, ctx, layer); return; }
+      var r = L.Browser.retina ? 2 : 1;
+      ctx.save();
+      if (fx.comp) ctx.globalCompositeOperation = fx.comp;
+      if (fx.shadow) { ctx.shadowColor = fx.shadow[0]; ctx.shadowBlur = fx.shadow[1] * r; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = (fx.shadow[2] || 0) * r; }
+      if (fx.radial && layer._point) {
+        var p = layer._point, rad = Math.max(1, layer._radius);
+        var g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, rad);
+        for (var i = 0; i < fx.radial.length; i++) g.addColorStop(fx.radial[i][0], fx.radial[i][1]);
+        ctx.globalAlpha = o.fillOpacity == null ? 1 : o.fillOpacity;
+        ctx.fillStyle = g; ctx.fill();
+        if (o.stroke && o.weight) {
+          if (ctx.setLineDash) ctx.setLineDash(o._dashArray || []);
+          ctx.shadowColor = 'transparent';
+          ctx.globalAlpha = o.opacity; ctx.lineWidth = o.weight; ctx.strokeStyle = o.color; ctx.stroke();
+        }
+      } else L.Canvas.prototype._fillStroke.call(this, ctx, layer);
+      ctx.restore();
+    }
+  });
+
+  function tintFor(l) {
+    var n = norm(l.n);
+    if (/swamp|marsh|grassrivers|everglade|bayou|marais/.test(n)) return { r: l.k === 'region' ? 2600 : 1300, c: '46,214,170', a: 0.30 };
+    if (/park|forest|mount|kalaga|woods|parc/.test(n)) return { r: 2600, c: '92,214,120', a: 0.20 };
+    if (/keys|beach|island|islands|sands/.test(n)) return { r: l.k === 'region' ? 2400 : 700, c: '80,226,255', a: 0.14 };
+    if (/lake|lac/.test(n)) return { r: 1800, c: '60,140,255', a: 0.16 };
+    if (l.k === 'city') return { r: (typeof l.minZoom === 'number' && l.minZoom <= -5.5) ? 2300 : 1150, c: '214,120,255', a: 0.22 };
+    if (l.k === 'district') return { r: 520, c: '190,170,255', a: 0.14 };
+    return null;
+  }
+
+  function drawBase(b) {
+    var padX = (b[2] - b[0]) * 0.35, padY = (b[3] - b[1]) * 0.35, gpx = padX * 3, gpy = padY * 3;
+    // grille néon (repère visuel, tous les 1000 m) : canvas à part pour ne pas être teinté
+    var gridR = L.canvas({ padding: 0.5, pane: 'base' });
+    var gx0 = Math.floor((b[0] - gpx) / 1000) * 1000, gx1 = Math.ceil((b[2] + gpx) / 1000) * 1000;
+    var gy0 = Math.floor((b[1] - gpy) / 1000) * 1000, gy1 = Math.ceil((b[3] + gpy) / 1000) * 1000;
+    var lines = [];
+    for (var gx = gx0; gx <= gx1; gx += 1000) lines.push([[gy0, gx], [gy1, gx]]);
+    for (var gy = gy0; gy <= gy1; gy += 1000) lines.push([[gy, gx0], [gy, gx1]]);
+    L.polyline(lines, { renderer: gridR, color: '#22e6ff', weight: 1, opacity: 0.07, interactive: false }).addTo(map);
+
+    var R = new FxCanvas({ padding: 0.5, pane: 'base' });
+    var polys = D.land && Array.isArray(D.land.polygons) ? D.land.polygons.concat(Array.isArray(D.land.holes) ? D.land.holes : []) : [];
+    var rings = polys.filter(function (p) { return Array.isArray(p) && p.length > 2; }).map(function (p) {
+      return p.map(function (pt) { return [pt[1], pt[0]]; });
+    });
+    var base = { renderer: R, interactive: false, smoothFactor: 1.5 };
+    landStyles = {};
+    if (rings.length) {
+      // 1. ombre portée côtière (sous la terre)
+      L.polygon(rings, L.extend({ stroke: false, fill: true, fillColor: '#03020d', fillOpacity: 1, fx: { shadow: ['rgba(0,0,0,.9)', 26, 10] } }, base)).addTo(map);
+      // 2. halo néon autour des côtes
+      landStyles.glow = L.polygon(rings, L.extend({ stroke: true, color: '#ff2e97', weight: 8, opacity: 0.17, fill: false }, base)).addTo(map);
+      // 3. terre
+      L.polygon(rings, L.extend({ stroke: false, fill: true, fillColor: '#1b1647', fillOpacity: 1 }, base)).addTo(map);
+      // 4. bande claire le long du rivage (relief), peinte seulement sur la terre
+      landStyles.band = L.polygon(rings, L.extend({ stroke: true, color: '#6fe3ff', weight: 10, opacity: 0.12, fill: false, fx: { comp: 'source-atop' } }, base)).addTo(map);
+      // 5. teintes par région (villes plus claires, marais vert-bleu…), seulement sur la terre
+      D.labels.forEach(function (l) {
+        var t = tintFor(l); if (!t) return;
+        L.circle([l.y, l.x], L.extend({ radius: t.r, stroke: false, fill: true, fillOpacity: 1,
+          fx: { comp: 'source-atop', radial: [[0, 'rgba(' + t.c + ',' + t.a + ')'], [0.55, 'rgba(' + t.c + ',' + (t.a * 0.45).toFixed(3) + ')'], [1, 'rgba(' + t.c + ',0)']] } }, base)).addTo(map);
+      });
+      // 6. trait de côte
+      L.polygon(rings, L.extend({ stroke: true, color: '#33e1ff', weight: 1.3, opacity: 0.8, fill: false }, base)).addTo(map);
+    }
+    // routes principales (approximatives) : liseré sombre + trait lumineux
+    var roads = Array.isArray(D.roads) ? D.roads : [];
+    landStyles.roads = [];
+    roads.forEach(function (r) {
+      if (!r || !Array.isArray(r.pts) || r.pts.length < 2) return;
+      var ll = r.pts.map(function (pt) { return [pt[1], pt[0]]; });
+      var hw = r.k === 'highway';
+      var cas = L.polyline(ll, L.extend({ color: '#0a0720', weight: hw ? 6 : 4.5, opacity: 0.95, lineCap: 'round', lineJoin: 'round' }, base)).addTo(map);
+      var core = L.polyline(ll, L.extend({ color: hw ? '#ff9bd8' : '#c9c3ff', weight: hw ? 2.4 : 1.6, opacity: hw ? 0.85 : 0.6, lineCap: 'round', lineJoin: 'round' }, base)).addTo(map);
+      landStyles.roads.push({ hw: hw, cas: cas, core: core });
+    });
+    map.on('zoomend', styleBase);
+    styleBase();
+  }
+  // épaisseurs selon le zoom (le canvas dessine en pixels écran)
+  function styleBase() {
+    if (!landStyles) return;
+    var z = map.getZoom(), k = Math.max(0, Math.min(1, (z - MIN_Z) / (MAX_Z - MIN_Z)));
+    if (landStyles.band) landStyles.band.setStyle({ weight: 5 + k * 22, opacity: 0.10 + k * 0.04 });
+    if (landStyles.glow) landStyles.glow.setStyle({ weight: 6 + k * 10 });
+    (landStyles.roads || []).forEach(function (r) {
+      r.cas.setStyle({ weight: (r.hw ? 5 : 3.5) + k * (r.hw ? 9 : 6) });
+      r.core.setStyle({ weight: (r.hw ? 2 : 1.3) + k * (r.hw ? 3.5 : 2.2) });
+    });
   }
 
   /* ---------- Carte ---------- */
@@ -186,7 +446,7 @@
   function initMap() {
     var b = bboxOf();
     var bounds = L.latLngBounds([b[1], b[0]], [b[3], b[2]]);
-    var padX = (b[2] - b[0]) * 0.35, padY = (b[3] - b[1]) * 0.35, gpx = padX * 3, gpy = padY * 3;
+    var padX = (b[2] - b[0]) * 0.35, padY = (b[3] - b[1]) * 0.35;
     map = L.map('map', {
       crs: L.CRS.Simple, minZoom: MIN_Z, maxZoom: MAX_Z, zoomSnap: 0.5, zoomDelta: 1,
       zoomControl: false, attributionControl: true, preferCanvas: false,
@@ -195,42 +455,18 @@
     });
     map.attributionControl.setPrefix(false);
     map.attributionControl.addAttribution('Carte non officielle · fond dessiné · <a href="https://leafletjs.com" target="_blank" rel="noopener">Leaflet</a>');
-    map.createPane('labels').style.zIndex = 450;
-    map.createPane('me').style.zIndex = 700;
-    map.createPane('base').style.zIndex = 300;   // fond dessiné (grille, terre)
-    map.createPane('mybg').style.zIndex = 350;   // « Mon fond de carte » (captures de l'utilisateur)
+    map.createPane('base').style.zIndex = 300;     // fond dessiné (grille, terre)
+    map.createPane('mybg').style.zIndex = 350;     // « Mon fond de carte » (captures de l'utilisateur)
     map.createPane('mybgline').style.zIndex = 360; // contours de contrôle pendant le calage
+    map.createPane('zones').style.zIndex = 380;    // halos des zones rentables
+    map.createPane('route').style.zIndex = 420;    // tracé de la tournée
+    map.createPane('labels').style.zIndex = 450;
+    map.createPane('routenum').style.zIndex = 640; // numéros de la tournée (au-dessus des marqueurs)
+    map.createPane('me').style.zIndex = 700;
 
-    var bg = L.canvas({ padding: 0.5, pane: 'base' });
-    // grille néon (repère visuel, tous les 1000 m)
-    var gx0 = Math.floor((b[0] - gpx) / 1000) * 1000, gx1 = Math.ceil((b[2] + gpx) / 1000) * 1000;
-    var gy0 = Math.floor((b[1] - gpy) / 1000) * 1000, gy1 = Math.ceil((b[3] + gpy) / 1000) * 1000;
-    var lines = [];
-    for (var gx = gx0; gx <= gx1; gx += 1000) lines.push([[gy0, gx], [gy1, gx]]);
-    for (var gy = gy0; gy <= gy1; gy += 1000) lines.push([[gy, gx0], [gy, gx1]]);
-    L.polyline(lines, { renderer: bg, color: '#22e6ff', weight: 1, opacity: 0.07, interactive: false }).addTo(map);
+    drawBase(b);
 
-    // terre
-    var polys = D.land && Array.isArray(D.land.polygons) ? D.land.polygons.concat(Array.isArray(D.land.holes) ? D.land.holes : []) : [];
-    var rings = polys.filter(function (p) { return Array.isArray(p) && p.length > 2; }).map(function (p) {
-      return p.map(function (pt) { return [pt[1], pt[0]]; });
-    });
-    if (rings.length) {
-      L.polygon(rings, { renderer: bg, stroke: true, color: '#ff2e97', weight: 7, opacity: 0.16, fill: false, interactive: false, smoothFactor: 1.5 }).addTo(map);
-      L.polygon(rings, { renderer: bg, stroke: true, color: '#33e1ff', weight: 1.3, opacity: 0.75, fill: true, fillColor: '#1c1648', fillOpacity: 1, interactive: false, smoothFactor: 1.5 }).addTo(map);
-    }
-
-    // routes principales (approximatives)
-    var roads = Array.isArray(D.roads) ? D.roads : [];
-    roads.forEach(function (r) {
-      if (!r || !Array.isArray(r.pts) || r.pts.length < 2) return;
-      var ll = r.pts.map(function (pt) { return [pt[1], pt[0]]; });
-      var hw = r.k === 'highway';
-      L.polyline(ll, { renderer: bg, color: '#0e0b2a', weight: hw ? 5 : 3.5, opacity: 0.9, interactive: false, smoothFactor: 1.5 }).addTo(map);
-      L.polyline(ll, { renderer: bg, color: hw ? '#ffb3e0' : '#b9b3ff', weight: hw ? 2.2 : 1.4, opacity: hw ? 0.55 : 0.4, interactive: false, smoothFactor: 1.5 }).addTo(map);
-    });
-
-    // libellés
+    // libellés (avec anti-collision)
     labelLayer = L.layerGroup().addTo(map);
     labelItems = D.labels.map(function (l) {
       var k = l.k === 'region' || l.k === 'district' ? l.k : 'city';
@@ -238,9 +474,14 @@
       var maxZ = typeof l.maxZoom === 'number' ? l.maxZoom : (k === 'region' ? -3.5 : MAX_Z);
       var mk = L.marker([l.y, l.x], { pane: 'labels', interactive: false, keyboard: false,
         icon: L.divIcon({ className: 'lbl ' + k, html: '<span>' + esc(l.n) + '</span>', iconSize: [0, 0] }) });
-      return { l: l, k: k, minZ: minZ, maxZ: maxZ, mk: mk, on: false };
-    });
+      var sz = labelSize(l.n, k);
+      return { l: l, k: k, minZ: minZ, maxZ: maxZ, mk: mk, on: false, w: sz[0], h: sz[1], prio: (k === 'city' ? 0 : k === 'region' ? 1000 : 2000) + minZ * 10 };
+    }).sort(function (a, b2) { return a.prio - b2.prio; });
     map.on('zoomend', updateLabels);
+    map.on('zoomend', updateZoomClass);
+
+    // zones rentables
+    drawZones();
 
     // clusters
     cluster = L.markerClusterGroup({
@@ -261,11 +502,12 @@
       var c = map.getCenter(); store.set('view', { x: Math.round(c.lng), y: Math.round(c.lat), z: map.getZoom() });
     }, 400));
     updateLabels();
+    updateZoomClass();
 
     map.on('click', function (e) {
       if (mybgBusy()) return;
       if (placingMe) { setMe(e.latlng); setPlacing(false); return; }
-      closeResults();
+      closeResults(); closeLegend();
       if (selected) closeSheet();
       else if (document.body.classList.contains('panel-open') && !isWide()) closePanel();
     });
@@ -274,25 +516,106 @@
 
   function mybgBusy() { return !!(window.GTA6_MYBG && window.GTA6_MYBG.busy()); }
 
+  var measureCtx = null;
+  function labelSize(txt, k) {
+    var fs = k === 'city' ? 15 : 13, ls = k === 'region' ? 0.22 : k === 'city' ? 0.08 : 0.12;
+    var font = (k === 'district' ? '700 ' + fs + 'px Rajdhani, sans-serif' : '700 ' + fs + 'px Orbitron, sans-serif');
+    var t = String(txt).toUpperCase(), w = t.length * fs * (k === 'district' ? 0.62 : 0.8);
+    try {
+      if (!measureCtx) measureCtx = document.createElement('canvas').getContext('2d');
+      measureCtx.font = font; w = measureCtx.measureText(t).width;
+    } catch (e) { /* estimation */ }
+    return [w + t.length * fs * ls + 6, fs + 6];
+  }
+  // n'affiche un libellé que s'il ne chevauche pas un libellé plus important (positions écran au zoom courant)
   function updateLabels() {
-    var z = map.getZoom();
+    var z = map.getZoom(), placed = [];
     labelItems.forEach(function (it) {
       var want = z >= it.minZ && z <= it.maxZ;
+      if (want) {
+        var p = map.project([it.l.y, it.l.x], z);
+        var bx = [p.x - it.w / 2, p.y - it.h / 2, p.x + it.w / 2, p.y + it.h / 2];
+        for (var i = 0; i < placed.length; i++) {
+          var q = placed[i];
+          if (bx[0] < q[2] + 4 && bx[2] > q[0] - 4 && bx[1] < q[3] + 2 && bx[3] > q[1] - 2) { want = false; break; }
+        }
+        if (want) placed.push(bx);
+      }
       if (want && !it.on) { labelLayer.addLayer(it.mk); it.on = true; }
       else if (!want && it.on) { labelLayer.removeLayer(it.mk); it.on = false; }
     });
+  }
+  function updateZoomClass() {
+    var c = map.getContainer();
+    var z = map.getZoom();
+    c.classList.toggle('zhi', opt.amt && z >= AMT_Z);
+    c.classList.toggle('zmid', z >= -3.5 && z < -1.5);
+    c.classList.toggle('znear', z >= -1.5);
+  }
+
+  /* ---------- Zones rentables ---------- */
+  function drawZones() {
+    if (!zones.length) return;
+    zoneRenderer = new FxCanvas({ padding: 0.3, pane: 'zones' });
+    zoneLayer = L.layerGroup();
+    zones.forEach(function (z) {
+      var K = kindOf(z.kind), s = z.score;
+      var c = L.circle([z.y, z.x], {
+        renderer: zoneRenderer, radius: z.r, interactive: true, bubblingMouseEvents: false,
+        stroke: true, color: K.c, weight: 1.2, opacity: 0.2 + 0.4 * s, dashArray: '4 8',
+        fill: true, fillOpacity: 1,
+        fx: { radial: [[0, 'rgba(' + K.rgb + ',' + (0.10 + 0.30 * s).toFixed(3) + ')'], [0.6, 'rgba(' + K.rgb + ',' + (0.06 + 0.22 * s).toFixed(3) + ')'], [0.85, 'rgba(' + K.rgb + ',' + (0.08 + 0.3 * s).toFixed(3) + ')'], [1, 'rgba(' + K.rgb + ',0)']] }
+      });
+      c._zone = z;
+      c.on('click', function (e) { L.DomEvent.stopPropagation(e); if (placingMe) { setMe(e.latlng); setPlacing(false); return; } zonePopup(z); });
+      z.layer = c;
+    });
+    map.on('zoomend', styleZones);
+    styleZones();
+    applyZones();
+  }
+  var zoneNear = null;
+  function styleZones() {
+    var near = map.getZoom() >= -3;
+    if (near === zoneNear) return;
+    zoneNear = near;
+    zones.forEach(function (z) { z.layer.setStyle({ stroke: near }); });
+  }
+  function applyZones() {
+    if (!zoneLayer) return;
+    zoneLayer.clearLayers();
+    if (opt.zones) zones.forEach(function (z) { if (opt.zk[z.kind] !== false) zoneLayer.addLayer(z.layer); });
+    if (opt.zones && !map.hasLayer(zoneLayer)) zoneLayer.addTo(map);
+    else if (!opt.zones && map.hasLayer(zoneLayer)) map.removeLayer(zoneLayer);
+  }
+  function routesForZone(z) {
+    return routes.filter(function (r) { return r.zone && norm(r.zone) === norm(z.n) && (!r.kind || !z.kind || r.kind === z.kind); });
+  }
+  function zonePopup(z) {
+    var K = kindOf(z.kind);
+    var el = document.createElement('div');
+    el.className = 'zp';
+    var rs = routesForZone(z);
+    el.innerHTML = '<div class="zp-h" style="--c:' + K.c + '"><span class="dot">' + ICONS.use(K.icon) + '</span><div><small>Zone rentable · ' + esc(K.n) + '</small><b>' + esc(z.n) + '</b></div></div>' +
+      '<div class="zp-g"><div><small>Points</small><strong>' + fmtInt(z.count || 0) + '</strong></div><div><small>Total estimé</small><strong>' + esc(fmtRangeK(z.lo, z.hi)) + '</strong></div></div>' +
+      '<div class="zp-s"><small>Rentabilité</small><span class="meter"><i style="width:' + Math.round(z.score * 100) + '%;background:' + K.c + '"></i></span></div>' +
+      (rs.length ? '<button type="button" class="btn primary zp-go">' + ICONS.use('ui_route') + 'Lancer la tournée</button>' : '');
+    var go = el.querySelector('.zp-go');
+    if (go) go.addEventListener('click', function () { map.closePopup(); startRoute(rs[0]); });
+    L.popup({ className: 'zpop', maxWidth: 280, minWidth: 220, autoPanPaddingTopLeft: [20, 80], autoPanPaddingBottomRight: [20, 40] })
+      .setLatLng([z.y, z.x]).setContent(el).openOn(map);
   }
 
   /* ---------- Marqueurs ---------- */
   function iconFor(m) {
     var c = cats[m.c];
-    var cls = 'mk' + (m.approx ? ' ap' : '') + (done[m.id] ? ' dn' : '') + (fav[m.id] ? ' fv' : '') + (selected === m ? ' sel' : '');
-    var key = m.c + '|' + cls;
+    var cls = 'mk' + (m.approx ? ' ap' : '') + (done[m.id] ? ' dn' : '') + (fav[m.id] ? ' fv' : '') + (selected === m ? ' sel' : '') + (m.tier >= 0 ? ' t' + m.tier : '') + (m.rt ? ' rt' : '');
+    var key = m.c + '|' + cls + '|' + m.amtLbl;
     var ic = iconCache[key];
     if (!ic) {
       ic = iconCache[key] = L.divIcon({
         className: cls, iconSize: [44, 44], iconAnchor: [22, 22],
-        html: '<div style="--c:' + esc(c.color) + '">' + ICONS.use(c.icon) + '</div>'
+        html: '<div style="--c:' + esc(c.color) + '">' + ICONS.use(c.icon) + '</div>' + (m.amtLbl ? '<b class="amt">' + esc(m.amtLbl) + '</b>' : '')
       });
     }
     return ic;
@@ -321,16 +644,24 @@
     return L.divIcon({ className: 'cl ' + size, iconSize: [px, px], html: '<div style="--c:' + color + '">' + fmtInt(n) + '</div>' });
   }
 
+  function filtersActive() { return F.min > 0 || Object.keys(F.diff).length > 0 || F.notrack || F.unlocked; }
+  function passFilters(m) {
+    if (F.min > 0 && !(m.amt >= F.min)) return false;
+    if (Object.keys(F.diff).length && !(m.i && m.i.diff && F.diff[m.i.diff])) return false;
+    if (F.notrack && m.sec.notrack !== true) return false;
+    if (F.unlocked && m.sec.unlocked !== true) return false;
+    return true;
+  }
   function wanted(m) {
     if (!visible[m.c]) return false;
     if (hideDone && done[m.id]) return false;
-    return true;
+    return passFilters(m);
   }
   function applyVisibility() {
     var add = [], rem = [];
     for (var i = 0; i < markers.length; i++) {
       var m = markers[i];
-      if (m.solo) continue; // point sélectionné : affiché hors clusters
+      if (m.pinned) continue; // point sélectionné ou de la tournée : affiché hors clusters
       var w = wanted(m);
       if (w && !m.on) { if (!m.mk) makeMarker(m); add.push(m.mk); m.on = true; }
       else if (!w && m.on) { rem.push(m.mk); m.on = false; }
@@ -423,8 +754,173 @@
       store.set('done', []);
       ids.forEach(function (id) { if (byId[id]) refreshIcon(byId[id]); });
       applyVisibility(); if (selected) renderSheet();
+      if (route) drawRouteNums();
       toast('Progression remise à zéro');
     });
+    buildFilters();
+    buildDisplay();
+    buildTabs();
+  }
+
+  /* ---------- Filtres ---------- */
+  function saveFilters() { store.set('filters', { min: F.min, diff: F.diff, notrack: F.notrack, unlocked: F.unlocked }); }
+  function minLabel(v) { return v > 0 ? '≥ ' + fmtK(v) : 'Tous'; }
+  function buildFilters() {
+    $('amtRow').hidden = !has.amt;
+    var sl = $('minAmt');
+    sl.max = String(MIN_STEPS.length - 1);
+    sl.value = String(Math.max(0, MIN_STEPS.indexOf(F.min)));
+    $('minAmtOut').textContent = minLabel(F.min);
+    var setMin = function (commit) {
+      F.min = MIN_STEPS[+sl.value] || 0;
+      $('minAmtOut').textContent = minLabel(F.min);
+      sl.style.setProperty('--p', (100 * sl.value / (MIN_STEPS.length - 1)) + '%');
+      if (commit) { saveFilters(); applyVisibility(); }
+    };
+    sl.addEventListener('input', function () { setMin(false); applyDebounced(); });
+    sl.addEventListener('change', function () { setMin(true); });
+    setMin(false);
+    var applyDebounced = debounce(function () { saveFilters(); applyVisibility(); }, 160);
+
+    $('diffRow').hidden = !has.diff;
+    var dc = $('diffChips'); dc.innerHTML = '';
+    [1, 2, 3].forEach(function (k) {
+      var b = document.createElement('button');
+      b.type = 'button'; b.className = 'chip sm d' + k; b.setAttribute('data-diff', k);
+      b.innerHTML = '<span class="gauge g' + k + '"><i></i><i></i><i></i></span>' + DIFF[k];
+      b.addEventListener('click', function () {
+        if (F.diff[k]) delete F.diff[k]; else F.diff[k] = true;
+        saveFilters(); applyVisibility();
+      });
+      dc.appendChild(b);
+    });
+    $('secRow').hidden = !(has.notrack || has.unlocked);
+    var sc = $('secChips'); sc.innerHTML = '';
+    [['notrack', 'Sans traceur', has.notrack], ['unlocked', 'Non verrouillé', has.unlocked]].forEach(function (d) {
+      if (!d[2]) return;
+      var b = document.createElement('button');
+      b.type = 'button'; b.className = 'chip sm'; b.setAttribute('data-sec', d[0]); b.textContent = d[1];
+      b.addEventListener('click', function () { F[d[0]] = !F[d[0]]; saveFilters(); applyVisibility(); });
+      sc.appendChild(b);
+    });
+    $('filtSec').hidden = !(has.amt || has.diff || has.notrack || has.unlocked);
+    $('filtReset').addEventListener('click', resetFilters);
+    $('filtPill').addEventListener('click', function () { resetFilters(); toast('Filtres retirés'); });
+  }
+  function resetFilters() {
+    F.min = 0; F.diff = {}; F.notrack = false; F.unlocked = false;
+    var sl = $('minAmt'); sl.value = '0'; sl.style.setProperty('--p', '0%'); $('minAmtOut').textContent = minLabel(0);
+    saveFilters(); applyVisibility();
+  }
+  function filterSummary() {
+    var p = [];
+    if (F.min > 0) p.push('≥ ' + fmtK(F.min));
+    var d = Object.keys(F.diff).map(function (k) { return DIFF[k]; });
+    if (d.length) p.push(d.join(' / '));
+    if (F.notrack) p.push('sans traceur');
+    if (F.unlocked) p.push('non verrouillé');
+    return p.join(' · ');
+  }
+  function updateFilterUI() {
+    var act = filtersActive();
+    $('filtReset').hidden = !act;
+    Array.prototype.forEach.call(document.querySelectorAll('#diffChips .chip'), function (b) {
+      var on = !!F.diff[b.getAttribute('data-diff')]; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on);
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('#secChips .chip'), function (b) {
+      var on = !!F[b.getAttribute('data-sec')]; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on);
+    });
+    $('btnLayers').classList.toggle('filt', act);
+    $('filtPill').hidden = !act;
+    $('filtPillTxt').textContent = act ? 'Filtre : ' + filterSummary() : '';
+    var n = $('filtNote');
+    if (act) {
+      var k = 0; for (var i = 0; i < markers.length; i++) if (visible[markers[i].c] && passFilters(markers[i])) k++;
+      n.hidden = false; n.textContent = k ? fmtInt(k) + ' point' + (k > 1 ? 's' : '') + ' correspond' + (k > 1 ? 'ent' : '') + ' aux filtres dans les calques affichés.' : 'Aucun point ne correspond : élargis les filtres ou affiche d\'autres calques.';
+    } else n.hidden = true;
+  }
+
+  /* ---------- Options d'affichage + légende ---------- */
+  function saveOpts() { store.set('opts', opt); }
+  function buildDisplay() {
+    var oa = $('optAmt'), os = $('optSize');
+    oa.checked = opt.amt; os.checked = opt.size;
+    $('dispSec').hidden = !has.amt;
+    oa.addEventListener('change', function () { opt.amt = oa.checked; saveOpts(); updateZoomClass(); });
+    os.addEventListener('change', function () { opt.size = os.checked; saveOpts(); document.body.classList.toggle('vsize', opt.size); });
+    document.body.classList.toggle('vsize', opt.size);
+    // zones
+    $('zoneSec').hidden = !zones.length;
+    if (zones.length) {
+      var oz = $('optZones'); oz.checked = opt.zones;
+      oz.addEventListener('change', function () { opt.zones = oz.checked; saveOpts(); applyZones(); updateZoneChips(); });
+      var kinds = []; zones.forEach(function (z) { if (kinds.indexOf(z.kind) < 0) kinds.push(z.kind); });
+      var box = $('zoneKinds'); box.innerHTML = '';
+      if (kinds.length > 1) kinds.forEach(function (k) {
+        var K = kindOf(k);
+        var b = document.createElement('button');
+        b.type = 'button'; b.className = 'chip sm zk'; b.setAttribute('data-k', k); b.style.setProperty('--c', K.c);
+        b.innerHTML = '<i></i>' + esc(K.n);
+        b.addEventListener('click', function () { opt.zk[k] = opt.zk[k] === false; if (!opt.zones) { opt.zones = true; oz.checked = true; } saveOpts(); applyZones(); updateZoneChips(); });
+        box.appendChild(b);
+      });
+      updateZoneChips();
+    }
+    buildLegend();
+  }
+  function updateZoneChips() {
+    Array.prototype.forEach.call(document.querySelectorAll('#zoneKinds .chip'), function (b) {
+      var on = opt.zones && opt.zk[b.getAttribute('data-k')] !== false;
+      b.classList.toggle('on', on); b.setAttribute('aria-pressed', on);
+    });
+  }
+  function buildLegend() {
+    var box = $('legendBox');
+    var h = '';
+    if (has.amt) {
+      h += '<h4>Ce que rapporte un point</h4><ul class="lg-t">' + TIERS.map(function (t) {
+        return '<li><span class="sw-t" style="--t:' + t.c + '">' + '$' + '</span>' + esc(t.n) + '</li>';
+      }).join('') + '</ul><p class="lg-n">Le montant s\'affiche sous l\'icône en zoomant. « ~ » = moyenne d\'une fourchette.</p>';
+    }
+    if (zones.length) {
+      var kinds = []; zones.forEach(function (z) { if (kinds.indexOf(z.kind) < 0) kinds.push(z.kind); });
+      h += '<h4>Zones rentables</h4><ul class="lg-z">' + kinds.map(function (k) {
+        var K = kindOf(k); return '<li><span class="halo" style="--c:' + K.rgb + '"></span>' + esc(K.n) + '</li>';
+      }).join('') + '</ul><p class="lg-n">Plus le halo est intense, plus la zone rapporte. Touche un halo pour le détail.</p>';
+    }
+    h += '<h4>Symboles</h4><ul class="lg-s">' +
+      '<li><span class="mk-s ap"></span>Position approximative</li>' +
+      '<li><span class="mk-s dn"></span>Déjà fait</li>' +
+      '<li><span class="mk-s fv"></span>Favori</li>' +
+      (routes.length ? '<li><span class="rnum-s">3</span>Étape d\'une tournée</li>' : '') + '</ul>';
+    box.innerHTML = h;
+  }
+  function toggleLegend() {
+    var open = $('legendBox').hidden;
+    $('legendBox').hidden = !open;
+    $('btnLegend').setAttribute('aria-expanded', open);
+    $('legend').classList.toggle('open', open);
+  }
+  function closeLegend() { if (!$('legendBox').hidden) toggleLegend(); }
+
+  /* ---------- Onglets du panneau ---------- */
+  var curTab = 'layers';
+  function buildTabs() {
+    $('tabRoutes').hidden = !routes.length;
+    Array.prototype.forEach.call(document.querySelectorAll('.tabs [role=tab]'), function (b) {
+      b.addEventListener('click', function () { setTab(b.getAttribute('data-tab')); });
+    });
+    var t = store.get('tab', 'layers');
+    setTab(t === 'routes' && !routes.length ? 'layers' : t, true);
+  }
+  function setTab(t, quiet) {
+    curTab = t;
+    Array.prototype.forEach.call(document.querySelectorAll('.tabs [role=tab]'), function (b) { b.setAttribute('aria-selected', b.getAttribute('data-tab') === t ? 'true' : 'false'); });
+    Array.prototype.forEach.call(document.querySelectorAll('.tabp'), function (p) { p.hidden = p.getAttribute('data-tab') !== t; });
+    if (t === 'routes') renderRouteList();
+    if (t === 'stats') renderStats();
+    if (!quiet) store.set('tab', t);
+    var pb = document.querySelector('.pbody'); if (pb) pb.scrollTop = 0;
   }
 
   function updateCounts() {
@@ -452,8 +948,11 @@
       var on = ids.length && ids.every(function (id) { return visible[id]; });
       b.classList.toggle('on', !!on); b.setAttribute('aria-pressed', on ? 'true' : 'false');
     });
-    $('visibleCount').textContent = shown ? fmtInt(shown) + ' point' + (shown > 1 ? 's' : '') + ' affiché' + (shown > 1 ? 's' : '') + ' sur ' + fmtInt(markers.length) : 'Aucun calque affiché : choisissez un préréglage ou une catégorie.';
+    if (filtersActive()) { shown = 0; for (var i = 0; i < markers.length; i++) if (markers[i].on || markers[i].pinned && wanted(markers[i])) shown++; }
+    $('visibleCount').textContent = shown ? fmtInt(shown) + ' point' + (shown > 1 ? 's' : '') + ' affiché' + (shown > 1 ? 's' : '') + ' sur ' + fmtInt(markers.length) + (filtersActive() ? ' (filtres actifs)' : '') : 'Aucun point affiché : choisissez un préréglage, une catégorie ou élargissez les filtres.';
+    updateFilterUI();
     renderFavs();
+    if (curTab === 'stats' && document.body.classList.contains('panel-open')) renderStats();
   }
 
   function renderFavs() {
@@ -467,7 +966,9 @@
     document.body.classList.add('panel-open');
     $('panel').setAttribute('aria-hidden', 'false'); $('btnLayers').setAttribute('aria-expanded', 'true');
     if (!isWide()) $('scrim').hidden = false;
-    closeResults();
+    closeResults(); closeLegend();
+    if (curTab === 'stats') renderStats();
+    if (curTab === 'routes') renderRouteList();
   }
   function closePanel() {
     document.body.classList.remove('panel-open');
@@ -476,15 +977,21 @@
   }
 
   /* ---------- Recherche ---------- */
+  function amtChip(m) {
+    if (!(m.amt > 0)) return '';
+    return '<b class="rv" style="--t:' + TIERS[m.tier].c + '">' + esc(m.amtEst ? fmtRangeK(m.amtLo, m.amtHi) : fmtK(m.amt)) + '</b>';
+  }
   function resultRow(m) {
     var c = cats[m.c];
     var b = document.createElement('button');
     b.type = 'button'; b.className = 'res'; b.setAttribute('role', 'option');
-    b.innerHTML = '<span class="dot" style="--c:' + esc(c.color) + '">' + ICONS.use(c.icon) + '</span><span class="rt"><span class="rn">' + esc(m.n) + '</span><span class="rc">' + esc(c.n) + (valueTag(m.v) ? ' · <b class="rv">' + esc(valueTag(m.v)) + '</b>' : lootRange(m.l) ? ' · <b class="rv">' + esc(lootRange(m.l)) + '</b>' : '') +
-      (done[m.id] ? ' · fait ✓' : '') + (!visible[m.c] ? ' · <span class="off">calque masqué</span>' : '') + '</span></span>';
+    var extra = amtChip(m) || (valueTag(m.v) ? '<b class="rv">' + esc(valueTag(m.v)) + '</b>' : lootRange(m.l) ? '<b class="rv">' + esc(lootRange(m.l)) + '</b>' : '');
+    b.innerHTML = '<span class="dot" style="--c:' + esc(c.color) + '">' + ICONS.use(c.icon) + '</span><span class="rt"><span class="rn">' + esc(m.n) + '</span><span class="rc">' + esc(c.n) +
+      (done[m.id] ? ' · fait ✓' : '') + (!visible[m.c] ? ' · <span class="off">calque masqué</span>' : '') + '</span></span>' + (extra ? '<span class="ra">' + extra + '</span>' : '');
     b.addEventListener('click', function () { focusMarker(m); });
     return b;
   }
+  var sortVal = !!store.get('sortVal', false);
   function search(q) {
     var box = $('results');
     var nq = norm(q).trim();
@@ -504,8 +1011,16 @@
       if (!visible[m.c]) s += 0.5;
       res.push([s, m]);
     }
-    res.sort(function (a, b) { return a[0] - b[0] || (a[1].n < b[1].n ? -1 : 1); });
+    if (sortVal) res.sort(function (a, b) { return (b[1].amt || 0) - (a[1].amt || 0) || a[0] - b[0] || (a[1].n < b[1].n ? -1 : 1); });
+    else res.sort(function (a, b) { return a[0] - b[0] || (a[1].n < b[1].n ? -1 : 1); });
     box.innerHTML = '';
+    if (res.length && has.amt) {
+      var tools = document.createElement('div');
+      tools.className = 'res-tools';
+      tools.innerHTML = '<span>' + fmtInt(res.length) + ' résultat' + (res.length > 1 ? 's' : '') + '</span><button type="button" class="sortb" aria-pressed="' + sortVal + '">' + ICONS.use('ui_sort') + (sortVal ? 'Triés par valeur' : 'Trier par valeur') + '</button>';
+      tools.querySelector('.sortb').addEventListener('click', function () { sortVal = !sortVal; store.set('sortVal', sortVal); search($('q').value); });
+      box.appendChild(tools);
+    }
     catHits.forEach(function (id) {
       var c = cats[id];
       var b = document.createElement('button');
@@ -562,28 +1077,41 @@
     return 'Leonida';
   }
 
-  function unsolo(m) {
-    if (!m || !m.solo) return;
-    map.removeLayer(m.mk); m.solo = false; m.mk.setZIndexOffset(0);
-    refreshIcon(m);
+  // un point « épinglé » est affiché hors des clusters (point sélectionné ou étape de la tournée)
+  function pin(m) {
+    if (!m.mk) makeMarker(m);
+    if (m.on) { cluster.removeLayer(m.mk); m.on = false; }
+    if (!m.pinned) { map.addLayer(m.mk); m.pinned = true; }
+  }
+  function unpinIfFree(m) {
+    if (!m.pinned || m.solo || m.rt) return;
+    map.removeLayer(m.mk); m.pinned = false;
     if (wanted(m)) { cluster.addLayer(m.mk); m.on = true; }
   }
-  function openSheet(m, fly) {
+  function unsolo(m) {
+    if (!m || !m.solo) return;
+    m.solo = false; m.mk.setZIndexOffset(m.rt ? 500 : 0);
+    refreshIcon(m);
+    unpinIfFree(m);
+  }
+  // fly : true = recentre et zoome au moins à minZ ; 'none' = ne bouge pas la carte
+  function openSheet(m, fly, minZ) {
     var prev = selected;
     selected = m;
     if (prev && prev !== m) unsolo(prev);
-    if (!m.mk) makeMarker(m);
-    if (!m.solo) {
-      if (m.on) { cluster.removeLayer(m.mk); m.on = false; }
-      m.solo = true; m.mk.setZIndexOffset(1000); map.addLayer(m.mk);
-    }
+    m.solo = true; pin(m); m.mk.setZIndexOffset(1000);
+    if (route) { var k = route.pts.indexOf(m); if (k >= 0 && k !== route.idx) { route.idx = k; drawRouteNums(); } }
     refreshIcon(m);
     clearLine();
     renderSheet();
     document.body.classList.add('sheet-open');
     $('sheet').setAttribute('aria-hidden', 'false');
+    $('sheet').scrollTop = 0;
     var sh = isWide() ? 0 : $('sheet').offsetHeight;
     document.body.style.setProperty('--sheeth', sh + 'px');
+    updateRoutePill();
+    closeLegend();
+    if (fly === 'none') return;
     var go = function () {
       var size = map.getSize();
       var pt = map.latLngToContainerPoint([m.y, m.x]);
@@ -592,7 +1120,7 @@
       map.panBy([pt.x - tx, pt.y - ty], { animate: true });
       flash(m);
     };
-    if (fly) map.setView([m.y, m.x], Math.max(map.getZoom(), 0), { animate: false });
+    if (fly) map.setView([m.y, m.x], Math.max(map.getZoom(), minZ == null ? 0 : minZ), { animate: false });
     go();
   }
   function flash(m) {
@@ -608,9 +1136,11 @@
     clearLine();
     unsolo(m);
     updateCounts();
+    updateRoutePill();
   }
 
-  function money(n) { return typeof n === 'number' && isFinite(n) && n > 0 ? String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, '\u202f') + '\u00a0$' : ''; }
+  function money(n) { return typeof n === 'number' && isFinite(n) && n > 0 ? String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' $' : ''; }
+  function moneyRange(a, b) { return a && b && a !== b ? money(a) + ' – ' + money(b) : money(b || a); }
   function mainValue(v) { return v ? (v.pay || v.sell || v.base || 0) : 0; }
   function realValue(v) { return v ? (v.pay || v.sell || 0) : 0; }
   function valueTag(v) {
@@ -620,30 +1150,14 @@
     if (v.base) return 'modèle de série ' + money(v.base);
     return '';
   }
-  function valueBlock(m) {
-    var v = m.v; if (!v) return '';
-    var rows = [];
-    if (v.pay) rows.push(['Paie du commanditaire', money(v.pay)]);
-    if (v.sell) rows.push(['Revente', money(v.sell)]);
-    if (v.reg) rows.push(['Coût pour la garder (enregistrement)', money(v.reg)]);
-    if (v.base && !v.sell && !v.pay) rows.push(['Modèle de série (coût d\'enregistrement)', money(v.base)]);
-    if (!rows.length) return '';
-    return '<div class="val"><b>Valeur</b>' + rows.map(function (r) { return '<div class="vr"><span>' + esc(r[0]) + '</span><strong>' + esc(r[1]) + '</strong></div>'; }).join('') +
-      (v.conf === 'moyenne' ? '<small>Valeur indicative (source unique)</small>' : '') + '</div>';
-  }
 
-  var LOOT_LBL = { cash: 'Butin', resale: 'Valeur à la revente', reward: 'Récompense', price: 'Prix' };
+  var LOOT_LBL = { cash: 'Butin', resale: 'Valeur à la revente', reward: 'Récompense', price: 'Prix à payer' };
   function lootRange(l) {
     if (!l || !(l.max || l.min)) return '';
     if (l.min && !l.max) return 'plus de ' + money(l.min);
     return l.min && l.max && l.min !== l.max ? money(l.min) + ' – ' + money(l.max) : money(l.max || l.min);
   }
   function lootScore(l) { return l ? ((l.min || 0) + (l.max || l.min || 0)) / 2 : 0; }
-  function lootBlock(m) {
-    var l = m.l, r = lootRange(l); if (!r) return '';
-    return '<div class="val"><b>' + esc(LOOT_LBL[l.kind] || 'Valeur') + '</b><div class="vr"><span>' + esc(l.note || '') + '</span><strong>' + esc(r) + '</strong></div>' +
-      (l.rule ? '<small>Montant habituel pour ce type de lieu</small>' : l.conf === 'moyenne' ? '<small>Valeur indicative (source unique)</small>' : '') + '</div>';
-  }
   function showTopLoot() {
     var list = markers.filter(function (m) { return lootScore(m.l) > 0 && m.l.kind !== 'price'; }).sort(function (a, b) { return lootScore(b.l) - lootScore(a.l) || (a.l.rule ? 1 : 0) - (b.l.rule ? 1 : 0); });
     var box = $('results');
@@ -653,15 +1167,87 @@
     box.hidden = false; box.scrollTop = 0;
   }
 
+  // badges de montant (butin / valeur / récompense / coûts)
+  function moneyBadges(m) {
+    var out = [], l = m.l, v = m.v;
+    var badge = function (lbl, val, n, cls) {
+      var t = n > 0 && cls !== 'cost' && cls !== 'est' ? tierOf(n) : -1;
+      out.push('<div class="mb' + (cls ? ' ' + cls : '') + '"' + (t >= 0 ? ' style="--t:' + TIERS[t].c + '"' : '') + '><small>' + esc(lbl) + '</small><strong>' + esc(val) + '</strong></div>');
+    };
+    if (l && (l.min || l.max)) {
+      var isPrice = l.kind === 'price', lo = l.min > 0 ? l.min : l.max, hi = l.max > 0 ? l.max : l.min;
+      badge(LOOT_LBL[l.kind] || 'Valeur', lootRange(l), (lo + hi) / 2, isPrice ? 'cost' : '');
+    }
+    if (v) {
+      if (v.pay) badge('Paie du commanditaire', money(v.pay), v.pay);
+      if (v.sell) badge('Revente', money(v.sell), v.sell);
+      if (v.base && !v.sell && !v.pay) badge('Modèle de série', money(v.base), v.base, 'est');
+      if (v.reg) badge('Pour la garder', money(v.reg), v.reg, 'cost');
+    }
+    return out.length ? '<div class="mbs">' + out.join('') + '</div>' : '';
+  }
+  function moneyNote(m) {
+    var l = m.l, v = m.v, p = [];
+    if (l && l.note) p.push(esc(l.note));
+    if (l && l.rule) p.push('<em>Montant habituel pour ce type de lieu.</em>');
+    else if ((l && l.conf === 'moyenne') || (v && v.conf === 'moyenne')) p.push('<em>Valeur indicative (source unique).</em>');
+    if (v && v.base && !v.sell && !v.pay) p.push('<em>Valeur exacte inconnue : prix du modèle de série.</em>');
+    return p.length ? '<p class="vnote">' + p.join(' ') + '</p>' : '';
+  }
+  function infoBlock(m) {
+    var i = m.i; if (!i) return '';
+    var h = '', cells = [];
+    if (i.diff) cells.push('<div class="ic-c d' + i.diff + '"><small>Difficulté</small><span class="gauge g' + i.diff + '"><i></i><i></i><i></i></span><b>' + DIFF[i.diff] + '</b></div>');
+    if (typeof i.wanted === 'number') {
+      var st = '';
+      for (var k = 1; k <= 5; k++) st += '<span class="st' + (k <= i.wanted ? ' on' : '') + '">' + ICONS.use('ui_star') + '</span>';
+      cells.push('<div class="ic-c wst"><small>Recherche</small><span class="stars" aria-label="' + i.wanted + ' étoile' + (i.wanted > 1 ? 's' : '') + ' sur 5">' + st + '</span><b>' + (i.wanted ? i.wanted + ' / 5' : 'Aucune') + '</b></div>');
+    }
+    if (i.chap) cells.push('<div class="ic-c"><small>Débloqué</small><span class="ib">' + ICONS.use('ui_book') + '</span><b>Chapitre ' + i.chap + '</b></div>');
+    if (i.time) cells.push('<div class="ic-c wide"><small>Horaire</small><span class="ib">' + ICONS.use('ui_clock') + '</span><b>' + esc(i.time) + '</b></div>');
+    if (cells.length) h += '<div class="icells">' + cells.join('') + '</div>';
+    if (i.req && i.req.length) {
+      h += '<div class="reqs"><h4>Il te faut</h4><ul>' + i.req.map(function (r) {
+        var q = REQ[r] || ['pin', r.replace(/-/g, ' ')];
+        return '<li>' + ICONS.use(q[0]) + '<span>' + esc(q[1]) + '</span></li>';
+      }).join('') + '</ul></div>';
+    }
+    if (i.tips && i.tips.length) {
+      h += '<div class="tips"><h4>Astuces</h4><ul>' + i.tips.map(function (t) { return '<li>' + ICONS.use('ui_bulb') + '<span>' + esc(t) + '</span></li>'; }).join('') + '</ul></div>';
+    }
+    return h;
+  }
+  function secLine(m) {
+    var s = m.sec, p = [];
+    if (!cats[m.c] || cats[m.c].g !== 'steal-vehicles') return '';
+    if (s.unlocked !== null) p.push('<span class="sec ' + (s.unlocked ? 'ok' : 'ko') + '">' + (s.unlocked ? 'Non verrouillé' : 'Verrouillé') + '</span>');
+    if (s.notrack !== null) p.push('<span class="sec ' + (s.notrack ? 'ok' : 'ko') + '">' + (s.notrack ? 'Sans traceur' : 'Traceur') + '</span>');
+    return p.length ? '<div class="secs">' + p.join('') + '</div>' : '';
+  }
+
+  function routeStrip(m) {
+    if (!route) return '';
+    var k = route.pts.indexOf(m); if (k < 0) return '';
+    var n = route.pts.length, nd = route.pts.filter(function (p) { return done[p.id]; }).length;
+    var K = kindOf(route.r.kind);
+    return '<div class="rstrip" style="--c:' + K.c + '"><div class="rs-h"><span class="rnum-s cur">' + (k + 1) + '</span><div class="rs-t"><b>' + esc(route.r.n) + '</b><small>Étape ' + (k + 1) + ' sur ' + n + ' · ' + nd + ' fait' + (nd > 1 ? 's' : '') + '</small></div>' +
+      '<button type="button" class="rs-x" id="rtQuit">Quitter</button></div>' +
+      '<div class="rs-bar"><i style="width:' + (100 * nd / n) + '%"></i></div>' +
+      '<div class="rs-btns"><button type="button" class="btn" id="rtPrev"' + (k === 0 ? ' disabled' : '') + ' aria-label="Étape précédente">' + ICONS.use('ui_prev') + '</button>' +
+      '<button type="button" class="btn primary" id="rtDone">' + ICONS.use('ui_check') + (done[m.id] ? 'Déjà fait · suivant' : 'Marquer fait') + '</button>' +
+      '<button type="button" class="btn" id="rtNext"' + (k === n - 1 ? ' disabled' : '') + ' aria-label="Étape suivante">' + ICONS.use('ui_next') + '</button></div></div>';
+  }
+
   function renderSheet() {
     var m = selected; if (!m) return;
     var c = cats[m.c];
     var me = store.get('me', null);
-    var h = '<div class="shd"><span class="dot" style="--c:' + esc(c.color) + '">' + ICONS.use(c.icon) + '</span><div><h2>' + esc(m.n) + '</h2>' +
-      '<span class="pill" style="--c:' + esc(c.color) + '"><i></i>' + esc(c.n) + '</span></div></div>' +
+    var h = routeStrip(m) +
+      '<div class="shd" style="--c:' + esc(c.color) + '"><span class="bigdot">' + ICONS.use(c.icon) + '</span><div class="sht"><h2>' + esc(m.n) + '</h2>' +
+      '<div class="shm"><span class="pill"><i></i>' + esc(c.n) + '</span><span class="zn">' + ICONS.use('ui_me') + esc(zoneOf(m)) + '</span></div></div>' +
+      moneyBadges(m) + secLine(m) + '</div>' +
       (m.g ? '<div class="howto"><span class="hti">' + ICONS.use('ui_compass') + '</span><div><b>Comment le trouver dans le jeu</b><p>' + esc(m.g) + '</p></div></div>' : '') +
-      valueBlock(m) + lootBlock(m) +
-      '<div class="meta"><span>Zone : <b>' + esc(zoneOf(m)) + '</b></span></div>';
+      infoBlock(m) + moneyNote(m);
     if (m.approx) h += '<div class="approx">◌ Position approximative</div>';
     h += m.d ? '<p class="desc">' + esc(m.d) + '</p>' : '<p class="desc empty">Pas encore de description pour ce point.</p>';
     if (me) h += '<div class="dist">' + fmtDist(Math.hypot(me[0] - m.x, me[1] - m.y)) + ' de « Je suis ici » (à vol d\'oiseau)</div>';
@@ -676,15 +1262,22 @@
     $('actFav').addEventListener('click', function () { toggleFav(m); });
     $('actCopy').addEventListener('click', function () { copyCoords(m); });
     var al = $('actLine'); if (al) al.addEventListener('click', function () { toggleLine(m); });
+    if ($('rtQuit')) {
+      $('rtQuit').addEventListener('click', function () { stopRoute(); });
+      $('rtPrev').addEventListener('click', function () { goStep(route.idx - 1); });
+      $('rtNext').addEventListener('click', function () { goStep(route.idx + 1); });
+      $('rtDone').addEventListener('click', routeDoneNext);
+    }
     if (document.body.classList.contains('sheet-open') && !isWide()) document.body.style.setProperty('--sheeth', $('sheet').offsetHeight + 'px');
   }
 
-  function toggleDone(m) {
+  function toggleDone(m, quiet) {
     if (done[m.id]) { delete done[m.id]; cats[m.c].ndone--; } else { done[m.id] = true; cats[m.c].ndone++; }
     store.set('done', Object.keys(done));
     refreshIcon(m); renderSheet(); updateCounts();
+    if (route && route.pts.indexOf(m) >= 0) drawRouteNums();
     var c = cats[m.c];
-    toast(done[m.id] ? 'Fait ✓  ' + c.n + ' : ' + c.ndone + ' / ' + c.list.length : 'Marqué comme non fait');
+    if (!quiet) toast(done[m.id] ? 'Fait ✓  ' + c.n + ' : ' + c.ndone + ' / ' + c.list.length : 'Marqué comme non fait');
   }
   function toggleFav(m) {
     if (fav[m.id]) delete fav[m.id]; else fav[m.id] = true;
@@ -706,6 +1299,143 @@
       if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(function () { toast('Coordonnées copiées'); }, fallback);
       else fallback();
     } catch (e) { fallback(); }
+  }
+
+  /* ---------- Tournées ---------- */
+  function routeDone(r) { var k = 0; r.pts.forEach(function (m) { if (done[m.id]) k++; }); return k; }
+  function renderRouteList() {
+    var box = $('routeList'); if (!box) return;
+    box.innerHTML = '';
+    routes.forEach(function (r) {
+      var K = kindOf(r.kind), nd = routeDone(r), n = r.pts.length, act = route && route.r === r;
+      var b = document.createElement('button');
+      b.type = 'button'; b.className = 'rcard' + (act ? ' act' : '') + (nd === n ? ' fin' : ''); b.style.setProperty('--c', K.c);
+      b.setAttribute('data-route', r.id);
+      b.innerHTML = '<div class="rc-h"><span class="dot">' + ICONS.use(K.icon) + '</span><div class="rc-t"><b>' + esc(r.n) + '</b><small>' + esc(K.n) + (r.zone ? ' · ' + esc(r.zone) : '') + '</small></div>' +
+        (act ? '<span class="rc-badge">En cours</span>' : nd === n ? '<span class="rc-badge ok">Terminée</span>' : '') + '</div>' +
+        '<div class="rc-g"><div><small>Gain</small><strong style="--t:' + TIERS[tierOf(r.hi || 1)].c + '">' + esc(fmtRangeK(r.lo, r.hi)) + '</strong></div><div><small>Distance</small><strong>' + esc(fmtKm(r.dist)) + '</strong></div><div><small>Points</small><strong>' + n + '</strong></div></div>' +
+        '<div class="rc-p"><span class="meter"><i style="width:' + (100 * nd / n) + '%"></i></span><small>' + nd + ' / ' + n + ' faits</small></div>' +
+        (r.note ? '<p class="rc-n">' + esc(r.note) + '</p>' : '');
+      b.addEventListener('click', function () { startRoute(r); });
+      box.appendChild(b);
+    });
+  }
+  function startRoute(r) {
+    if (route) clearRoute();
+    var pts = r.pts;
+    // affiche les calques des points de la tournée
+    var shownCats = false;
+    pts.forEach(function (m) { if (!visible[m.c]) { visible[m.c] = true; shownCats = true; } });
+    if (shownCats) applyVisibility();
+    var ll = pts.map(function (m) { return [m.y, m.x]; });
+    var K = kindOf(r.kind);
+    route = { r: r, pts: pts, idx: 0, nums: [] };
+    pts.forEach(function (m) { m.rt = true; pin(m); if (!m.solo) m.mk.setZIndexOffset(500); refreshIcon(m); });
+    route.glow = L.polyline(ll, { pane: 'route', color: K.c, weight: 10, opacity: 0.22, interactive: false, lineCap: 'round', lineJoin: 'round' }).addTo(map);
+    route.line = L.polyline(ll, { pane: 'route', color: '#ffffff', weight: 2.5, opacity: 0.9, dashArray: '10 8', interactive: false, lineCap: 'round', lineJoin: 'round' }).addTo(map);
+    pts.forEach(function (m, k) {
+      var mk = L.marker([m.y, m.x], { pane: 'routenum', keyboard: false, zIndexOffset: 0, icon: numIcon(k, '') });
+      mk.on('click', function (e) { if (e.originalEvent) L.DomEvent.stop(e.originalEvent); goStep(k); });
+      mk.addTo(map); route.nums.push(mk);
+    });
+    document.body.classList.add('route-on');
+    var first = 0; for (var i = 0; i < pts.length; i++) { if (!done[pts[i].id]) { first = i; break; } }
+    route.idx = first;
+    drawRouteNums();
+    if (!isWide()) closePanel();
+    if (curTab === 'routes') renderRouteList();
+    openSheet(pts[first], 'none');
+    var sh = isWide() ? 0 : $('sheet').offsetHeight;
+    var pad = isWide() ? { paddingTopLeft: [(document.body.classList.contains('panel-open') ? 400 : 40), 80], paddingBottomRight: [460, 40] } : { paddingTopLeft: [30, 80], paddingBottomRight: [30, sh + 20] };
+    map.fitBounds(route.line.getBounds(), L.extend(pad, { maxZoom: 0.5 }));
+  }
+  function numIcon(k, cls) {
+    return L.divIcon({ className: 'rnum' + cls, iconSize: [26, 26], iconAnchor: [-3, 31], html: '<span>' + (k + 1) + '</span>' });
+  }
+  function drawRouteNums() {
+    if (!route) return;
+    route.nums.forEach(function (mk, k) {
+      var m = route.pts[k];
+      var cls = (k === route.idx ? ' cur' : '') + (done[m.id] ? ' dn' : '');
+      if (mk._cls !== cls) { mk._cls = cls; mk.setIcon(numIcon(k, cls)); }
+      mk.setZIndexOffset(k === route.idx ? 1000 : 0);
+    });
+  }
+  function goStep(k) {
+    if (!route || k < 0 || k >= route.pts.length) return;
+    route.idx = k;
+    drawRouteNums();
+    openSheet(route.pts[k], true, -1);
+  }
+  function routeDoneNext() {
+    if (!route) return;
+    var m = route.pts[route.idx];
+    if (!done[m.id]) toggleDone(m, true);
+    var n = route.pts.length, nxt = -1;
+    for (var i = 1; i <= n; i++) { var k = (route.idx + i) % n; if (!done[route.pts[k].id]) { nxt = k; break; } }
+    if (nxt < 0) {
+      var r = route.r;
+      toast('Tournée terminée ! ' + (r.hi ? 'Gain estimé : ' + fmtRangeK(r.lo, r.hi) : ''));
+      renderSheet(); renderRouteList();
+      return;
+    }
+    goStep(nxt);
+  }
+  function clearRoute() {
+    if (!route) return;
+    map.removeLayer(route.glow); map.removeLayer(route.line);
+    route.nums.forEach(function (mk) { map.removeLayer(mk); });
+    var pts = route.pts;
+    route = null;
+    pts.forEach(function (m) { m.rt = false; if (m.mk && !m.solo) m.mk.setZIndexOffset(0); refreshIcon(m); unpinIfFree(m); });
+    document.body.classList.remove('route-on');
+  }
+  function stopRoute() {
+    clearRoute();
+    if (selected) renderSheet();
+    updateRoutePill();
+    if (curTab === 'routes') renderRouteList();
+    toast('Tournée arrêtée');
+  }
+  function updateRoutePill() {
+    var show = !!route && !selected;
+    $('routePill').hidden = !show;
+    if (show) $('rpTxt').textContent = route.r.n + ' · étape ' + (route.idx + 1) + ' / ' + route.pts.length;
+  }
+
+  /* ---------- Statistiques ---------- */
+  function renderStats() {
+    var box = $('statsBody'); if (!box) return;
+    var tot = markers.length, nd = Object.keys(done).filter(function (id) { return byId[id]; }).length;
+    var potLo = 0, potHi = 0, potN = 0, gotLo = 0, gotHi = 0, top = [];
+    markers.forEach(function (m) {
+      if (!(m.amt > 0)) return;
+      if (done[m.id]) { gotLo += m.amtLo; gotHi += m.amtHi; }
+      else { potLo += m.amtLo; potHi += m.amtHi; potN++; top.push(m); }
+    });
+    top.sort(function (a, b) { return b.amt - a.amt; });
+    var pct = tot ? Math.round(1000 * nd / tot) / 10 : 0;
+    var pctTxt = nd && pct < 0.1 ? '< 0,1' : String(pct).replace('.', ',');
+    var h = '<section class="psec"><h3>Progression globale</h3><div class="st-big"><strong>' + pctTxt + ' %</strong><span>' + fmtInt(nd) + ' / ' + fmtInt(tot) + ' points faits</span></div>' +
+      '<span class="meter big"><i style="width:' + pct + '%"></i></span></section>';
+    if (has.amt) {
+      h += '<section class="psec"><h3>Argent potentiel restant</h3><div class="st-money"><strong>' + esc(fmtRangeK(potLo, potHi)) + '</strong><span>à récupérer sur ' + fmtInt(potN) + ' point' + (potN > 1 ? 's' : '') + ' rentable' + (potN > 1 ? 's' : '') + ' non fait' + (potN > 1 ? 's' : '') + '</span></div>' +
+        (gotHi > 0 ? '<p class="muted small">Déjà empoché (estimation) : <b class="okc">' + esc(fmtRangeK(gotLo, gotHi)) + '</b></p>' : '') + '</section>';
+    }
+    h += '<section class="psec"><h3>Par groupe</h3><ul class="st-g">' + groups.map(function (g) {
+      var t = 0, d = 0; g.cats.forEach(function (c) { t += c.list.length; d += c.ndone; });
+      return '<li><div class="st-gl"><span>' + esc(g.n) + '</span><b' + (d === t ? ' class="okc"' : '') + '>' + fmtInt(d) + ' / ' + fmtInt(t) + '</b></div><span class="meter"><i style="width:' + (t ? 100 * d / t : 0) + '%"></i></span></li>';
+    }).join('') + '</ul></section>';
+    if (routes.length) {
+      var fin = routes.filter(function (r) { return routeDone(r) === r.pts.length; }).length;
+      h += '<section class="psec"><h3>Tournées</h3><p class="st-line">Tournées terminées : <b' + (fin === routes.length ? ' class="okc"' : '') + '>' + fin + ' / ' + routes.length + '</b></p></section>';
+    }
+    if (top.length) h += '<section class="psec"><h3>Top 10 à faire (les plus rentables)</h3><div id="statsTop" class="favlist"></div></section>';
+    box.innerHTML = h;
+    var tb = $('statsTop');
+    if (tb) top.slice(0, 10).forEach(function (m, k) {
+      var row = resultRow(m); row.classList.add('top'); row.insertAdjacentHTML('afterbegin', '<span class="rk">' + (k + 1) + '</span>'); tb.appendChild(row);
+    });
   }
 
   /* ---------- « Je suis ici » ---------- */
@@ -759,10 +1489,13 @@
       var me = store.get('me', null); if (!me) return;
       map.setView([me[1], me[0]], Math.max(map.getZoom(), -1));
     });
+    $('btnLegend').addEventListener('click', toggleLegend);
+    $('rpResume').addEventListener('click', function () { if (route) goStep(route.idx); });
+    $('rpQuit').addEventListener('click', stopRoute);
     var q = $('q');
     var ds = debounce(function () { search(q.value); }, 120);
     q.addEventListener('input', ds);
-    q.addEventListener('focus', function () { if (q.value.trim().length >= 2) search(q.value); if (!isWide()) closePanel(); });
+    q.addEventListener('focus', function () { if (q.value.trim().length >= 2) search(q.value); if (!isWide()) closePanel(); closeLegend(); });
     q.addEventListener('keydown', function (e) {
       if (e.key === 'Enter') { var f = $('results').querySelector('.res'); if (f) f.click(); }
       else if (e.key === 'Escape') { e.stopPropagation(); closeResults(); q.blur(); }
@@ -773,6 +1506,7 @@
       if (mybgBusy()) return;
       if (placingMe) setPlacing(false);
       else if (!$('results').hidden) closeResults();
+      else if (!$('legendBox').hidden) closeLegend();
       else if (selected) closeSheet();
       else if (document.body.classList.contains('panel-open')) closePanel();
     });
@@ -782,6 +1516,7 @@
     sheet.addEventListener('touchend', function (e) { if (y0 !== null && e.changedTouches[0].clientY - y0 > 70) closeSheet(); y0 = null; }, { passive: true });
     L.DomEvent.disableClickPropagation($('topbar'));
     L.DomEvent.disableScrollPropagation($('results'));
+    ['legend', 'routePill', 'filtPill'].forEach(function (id) { L.DomEvent.disableClickPropagation($(id)); L.DomEvent.disableScrollPropagation($(id)); });
   }
 
   /* ---------- Service worker (facultatif) ---------- */
@@ -810,6 +1545,7 @@
       bindUI();
       drawMe();
       applyVisibility();
+      fillIcons();
       if (window.GTA6_MYBG) {
         try {
           window.GTA6_MYBG.init({ map: map, land: D.land, labels: D.labels, markers: markers, cats: cats, store: store, toast: toast, esc: esc, norm: norm,
@@ -820,7 +1556,9 @@
       document.body.classList.add('ready');
       var l = $('loader'); l.classList.add('hide');
       setTimeout(function () { l.hidden = true; }, 400);
-      window.GTA6_APP = { map: map, markers: markers, cats: cats, visible: visible, cluster: cluster, openSheet: openSheet, closeSheet: closeSheet, focusMarker: focusMarker, applyVisibility: applyVisibility };
+      window.GTA6_APP = { map: map, markers: markers, cats: cats, visible: visible, cluster: cluster, openSheet: openSheet, closeSheet: closeSheet, focusMarker: focusMarker, applyVisibility: applyVisibility,
+        routes: routes, zones: zones, startRoute: startRoute, stopRoute: stopRoute, goStep: goStep, setTab: setTab, openPanel: openPanel, closePanel: closePanel,
+        filters: F, opts: opt, route: function () { return route; }, labels: function () { return labelItems.filter(function (it) { return it.on; }).map(function (it) { return it.l.n; }); } };
     }, function () {
       showError('Données de la carte introuvables ou illisibles. Vérifiez votre connexion (ou le dossier « data »), puis réessayez.');
     });
