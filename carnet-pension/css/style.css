@@ -75,10 +75,68 @@ fieldset.horse { border: 1px solid var(--line); border-radius: 10px; margin: 0 0
   .trow.owner textarea { grid-column: 1; }
 }
 
+/* ---------- settings: structured address ---------- */
+.addr-grid { display: grid; grid-template-columns: 5.5rem 1fr 4.5rem; gap: .4rem; margin: .5rem 0; }
+.addr-grid label { display: block; font-size: .85rem; min-width: 0; }
+.addr-grid input { display: block; width: 100%; margin-top: .15rem; }
+.addr-grid .af-street { grid-column: 1 / 3; }
+.addr-grid .af-buildingNo { grid-column: 3; }
+.addr-grid .af-postalCode { grid-column: 1; }
+.addr-grid .af-town { grid-column: 2 / 4; }
+.addr-grid .af-country { grid-column: 1; }
+fieldset.owner .addr-grid { margin-bottom: 0; }
+p.ok { color: var(--accent); }
+p.bad { color: var(--danger); }
+.card.warn { border-color: #e2c26b; background: #fdf6e1; }
+
 /* ---------- invoice (print) ---------- */
 .print-only { display: none; }
-.invoice { padding: 1.5cm 1.2cm; page-break-after: always; color: #000; }
-.invoice:last-child { page-break-after: auto; }
+.invoice { padding: 1.5cm 1.2cm; color: #000; }
+.invoice .addr { margin: .2rem 0; }
+.inv-flow { break-after: page; page-break-after: always; }
+.inv-page { page: qrbill; position: relative; width: 210mm; height: 297mm; overflow: hidden; break-after: page; page-break-after: always; }
+.inv-flow:last-child, .inv-page:last-child { break-after: auto; page-break-after: auto; }
+.inv-page > .invoice { height: 192mm; overflow: hidden; }
+.qrb-wrap { position: absolute; left: 0; bottom: 0; width: 210mm; height: 105mm; }
+.invoice-measure { position: absolute; left: -10000px; top: 0; width: 210mm; visibility: hidden; }
+.invoice-measure .mm-probe { height: 100mm; }
+
+/* ---------- Swiss QR-bill: payment part + receipt (IG QR-bill v2.4, 210 x 105 mm) ---------- */
+.qrb { position: relative; width: 210mm; height: 105mm; background: #fff; color: #000;
+  font-family: Arial, Helvetica, "Liberation Sans", sans-serif; font-style: normal; text-decoration: none; }
+.qrb::before { content: ""; position: absolute; left: 0; right: 0; top: 0; border-top: 0.5pt dashed #000; }
+.qrb::after { content: ""; position: absolute; top: 0; bottom: 0; left: 62mm; border-left: 0.5pt dashed #000; }
+.qrb-cut-h, .qrb-cut-v { position: absolute; width: 4.5mm; height: 4.5mm; background: #fff; z-index: 1; line-height: 0; }
+.qrb-cut-h { left: 4mm; top: -2.25mm; }
+.qrb-cut-v { left: 59.75mm; top: 3mm; transform: rotate(90deg); }
+.qrb-scissors { width: 100%; height: 100%; }
+.qrb section { position: absolute; top: 0; height: 105mm; }
+.qrb-receipt { left: 0; width: 62mm; }
+.qrb-pay { left: 62mm; width: 148mm; }
+.qrb h3, .qrb h4, .qrb p { margin: 0; padding: 0; font-weight: bold; }
+.qrb p { font-weight: normal; }
+.qrb .qrb-title { position: absolute; left: 5mm; top: 5mm; font-size: 11pt; line-height: 11pt; }
+.qrb-r-info { position: absolute; left: 5mm; top: 12mm; width: 52mm; height: 56mm; overflow: hidden; }
+.qrb-r-amount { position: absolute; left: 5mm; top: 68mm; width: 52mm; height: 14mm; display: flex; }
+.qrb-r-accept { position: absolute; left: 5mm; top: 82mm; width: 52mm; height: 18mm; text-align: right; font-size: 6pt; line-height: 8pt; font-weight: bold; }
+.qrb-qr { position: absolute; left: 5mm; top: 17mm; width: 46mm; height: 46mm; }
+.qrb-qr svg { display: block; width: 46mm; height: 46mm; }
+.qrb-p-amount { position: absolute; left: 5mm; top: 68mm; width: 46mm; height: 22mm; display: flex; }
+.qrb-p-info { position: absolute; left: 56mm; top: 5mm; width: 87mm; height: 85mm; overflow: hidden; }
+.qrb-receipt h4 { font-size: 6pt; line-height: 9pt; }
+.qrb-receipt p { font-size: 8pt; line-height: 9pt; }
+.qrb-r-info p { margin-bottom: 9pt; }
+.qrb-pay h4 { font-size: 8pt; line-height: 11pt; }
+.qrb-pay p { font-size: 10pt; line-height: 11pt; }
+.qrb-p-info p { margin-bottom: 9pt; overflow-wrap: anywhere; }
+.qrb-cur { width: 13mm; flex: none; }
+.qrb-pay .qrb-cur { width: 15mm; }
+.qrb-amt p { white-space: nowrap; }
+.qrb svg.qrb-box { display: block; margin-top: 1pt; }
+@media print {
+  @page { size: A4; margin: 12mm 0; }
+  @page qrbill { size: A4; margin: 0; }
+}
 .inv-head { display: flex; justify-content: space-between; gap: 1rem; margin-bottom: 1.2cm; }
 .inv-head h1 { font-size: 1.3rem; margin: 0; }
 .inv-to { min-width: 6cm; }

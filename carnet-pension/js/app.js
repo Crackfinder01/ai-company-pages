@@ -5,6 +5,7 @@
   var STORAGE_KEY = 'stableBilling.v1';
   var B = window.Billing;
   var I = window.I18N;
+  var Q = window.QRBill;
 
   function pad2(n) { return (n < 10 ? '0' : '') + n; }
   function todayStr() {
@@ -169,9 +170,35 @@
   }
 
   // ---------- tab: month ----------
-  function invoiceNumber(inv) {
-    var idx = data.owners.map(function (o) { return o.id; }).indexOf(inv.ownerId) + 1;
-    return inv.month.replace('-', '') + '-' + pad2(idx);
+  function invoiceNumber(inv) { return B.invoiceNumber(data, inv); }
+
+  // ---------- Swiss QR-bill ----------
+  function qrFor(inv) {
+    var owner = byId(data.owners, inv.ownerId);
+    var horses = [];
+    inv.lines.forEach(function (l) { if (horses.indexOf(l.horseName) === -1) horses.push(l.horseName); });
+    return Q.fromInvoice(data.settings, owner, inv.total, {
+      month: inv.month, seq: B.invoiceSeq(data, inv.ownerId), number: invoiceNumber(inv),
+      horses: horses, lang: data.settings.lang
+    });
+  }
+
+  /** Errors that block the QR-bill for every invoice (settings), as short texts. */
+  function qrSetupProblems() {
+    var res = Q.fromInvoice(data.settings, null, 1, { month: '2026-01', seq: 1, number: '202601-01', horses: [], lang: data.settings.lang });
+    var seen = {};
+    return res.errors.map(function (code) {
+      if (code.indexOf('iban_') === 0) return t('ibanErr_' + code.slice(5));
+      var key = 'qrErr_' + code;
+      return I.T.fr[key] ? t(key) : t('qrErr_other');
+    }).filter(function (msg) { if (seen[msg]) return false; seen[msg] = true; return true; });
+  }
+
+  function ibanStatus() {
+    var v = Q.validateIban(data.settings.iban);
+    if (!v.valid) return { ok: false, text: t('ibanErr_' + v.error) };
+    if (v.qr) return { ok: true, text: t('ibanOkQr') };
+    return { ok: true, text: t(data.settings.refType === 'NON' ? 'ibanOkNon' : 'ibanOkScor') };
   }
 
   function renderMonth() {
@@ -183,6 +210,14 @@
       '<button type="button" class="btn" data-action="print-all"' + (invoices.length ? '' : ' disabled') + '>' + esc(t('printAll')) + '</button></div>';
     if (!invoices.length) {
       html += '<div class="card"><p class="muted">' + esc(t('noInvoices')) + '</p></div>';
+    } else {
+      var problems = qrSetupProblems();
+      if (problems.length) {
+        html += '<div class="card warn"><p>' + esc(t('qrMissing', { what: problems.join(' · ') })) + '</p>' +
+          '<button type="button" class="btn" data-tab="setup">' + esc(t('goSetup')) + '</button></div>';
+      } else {
+        html += '<p class="small muted">' + esc(t('qrPrintHint')) + '</p>';
+      }
     }
     var grand = 0;
     invoices.forEach(function (inv) {
@@ -207,6 +242,10 @@
     el.innerHTML = html;
   }
 
+  function linesHTML(lines) {
+    return lines.map(esc).join('<br>');
+  }
+
   function invoiceHTML(inv) {
     var o = byId(data.owners, inv.ownerId) || { name: '?', address: '' };
     var s = data.settings;
@@ -221,8 +260,9 @@
         '<td class="num">' + esc(l.qty) + '</td><td class="num">' + money(l.unitPrice) + '</td><td class="num">' + money(l.amount) + '</td></tr>';
     }).join('');
     return '<article class="invoice">' +
-      '<header class="inv-head"><div><h1>' + esc(s.stableName || t('stable')) + '</h1><pre>' + esc(s.address) + '</pre></div>' +
-      '<div class="inv-to"><div class="muted small">' + esc(t('invoiceFor')) + '</div><strong>' + esc(o.name) + '</strong><pre>' + esc(o.address || '') + '</pre></div></header>' +
+      '<header class="inv-head"><div><h1>' + esc(s.stableName || t('stable')) + '</h1><p class="addr">' + linesHTML(B.addressLines(s)) + '</p>' +
+      (s.contact ? '<pre>' + esc(s.contact) + '</pre>' : '') + '</div>' +
+      '<div class="inv-to"><div class="muted small">' + esc(t('invoiceFor')) + '</div><strong>' + esc(o.name) + '</strong><p class="addr">' + linesHTML(B.addressLines(o)) + '</p></div></header>' +
       '<h2>' + esc(t('invoice')) + ' ' + esc(invoiceNumber(inv)) + '</h2>' +
       '<p>' + esc(t('period')) + (data.settings.lang === 'fr' ? ' : ' : ': ') + esc(inv.month.split('-').reverse().join('.')) + '</p>' +
       '<table><thead><tr><th>' + esc(t('date')) + '</th><th>' + esc(t('horse')) + '</th><th>' + esc(t('item')) + '</th>' +
@@ -230,12 +270,40 @@
       '<tbody>' + rows + '</tbody>' +
       '<tfoot><tr><td colspan="5">' + esc(t('subtotal')) + '</td><td class="num">' + money(inv.subtotal) + '</td></tr>' +
       '<tr class="grand"><td colspan="5">' + esc(t('roundedTotal')) + ' (CHF)</td><td class="num">' + money(inv.total) + '</td></tr></tfoot></table>' +
-      '<p>' + esc(t('payBy', { n: s.paymentDays || 30 })) + (s.iban ? ' · ' + esc(t('iban')) + ' ' + esc(s.iban) : '') + '</p>' +
+      '<p>' + esc(t('payBy', { n: s.paymentDays || 30 })) + (s.iban ? ' · ' + esc(t('iban')) + ' ' + esc(Q.formatIban(s.iban)) : '') + '</p>' +
       '</article>';
   }
 
+  // Space left above the QR-bill on an A4 page: 297 - 105 mm, minus a small safety margin.
+  var BODY_MAX_MM = 189;
+
+  function measureMm(html) {
+    var box = document.createElement('div');
+    box.className = 'invoice-measure';
+    box.innerHTML = html;
+    document.body.appendChild(box);
+    var px = box.firstChild.getBoundingClientRect().height;
+    var mm1 = box.querySelector('.mm-probe').getBoundingClientRect().height / 100;
+    box.remove();
+    return px / mm1;
+  }
+
+  /**
+   * One A4 page per invoice with the QR-bill (210 x 105 mm) on the lower edge.
+   * If the invoice is too long, its lines flow on normal pages and the QR-bill gets its own page.
+   */
+  function pageHTML(inv) {
+    var body = invoiceHTML(inv);
+    var qr = qrFor(inv);
+    if (qr.errors.length) return '<div class="inv-flow">' + body + '</div>';
+    var qrHTML = '<div class="qrb-wrap">' + Q.renderHTML(qr.bill, data.settings.lang) + '</div>';
+    var tall = measureMm(body + '<div class="mm-probe"></div>') > BODY_MAX_MM;
+    if (tall) return '<div class="inv-flow">' + body + '</div><div class="inv-page inv-page-qr">' + qrHTML + '</div>';
+    return '<div class="inv-page">' + body + qrHTML + '</div>';
+  }
+
   function printInvoices(invs) {
-    document.getElementById('print-area').innerHTML = invs.map(invoiceHTML).join('');
+    document.getElementById('print-area').innerHTML = invs.map(pageHTML).join('');
     window.print();
   }
 
@@ -257,14 +325,37 @@
     }).join('') + '</select>';
   }
 
+  /** Structured address inputs (street, number, postcode, town, country). attr: attribute prefix for the field name. */
+  function addressFields(attr, obj) {
+    function input(field, extra) {
+      return '<label class="af-' + field + '">' + esc(t(field)) + '<input ' + attr + '="' + field + '" value="' + esc(obj[field] || (field === 'country' ? 'CH' : '')) + '"' + (extra || '') + '></label>';
+    }
+    return '<div class="addr-grid">' +
+      input('street', ' maxlength="70" autocomplete="off"') + input('buildingNo', ' maxlength="16"') +
+      input('postalCode', ' maxlength="16" inputmode="numeric"') + input('town', ' maxlength="35"') +
+      input('country', ' maxlength="2" autocapitalize="characters"') + '</div>';
+  }
+
   function renderSetup() {
     var el = document.getElementById('tab-setup');
     var s = data.settings;
     var html = '';
+    var ib = ibanStatus();
+    var isQr = Q.validateIban(s.iban).qr;
+    var legacyStable = s.address && !s.postalCode && !s.town;
     html += '<div class="card"><h2>' + esc(t('stable')) + '</h2>' +
-      '<label class="block">' + esc(t('stableName')) + '<input data-setting="stableName" value="' + esc(s.stableName) + '"></label>' +
-      '<label class="block">' + esc(t('stableAddress')) + '<textarea rows="2" data-setting="address">' + esc(s.address) + '</textarea></label>' +
-      '<label class="block">' + esc(t('iban')) + '<input data-setting="iban" value="' + esc(s.iban) + '"></label>' +
+      '<p class="small muted">' + esc(t('qrHelp')) + '</p>' +
+      '<label class="block">' + esc(t('stableName')) + '<input data-setting="stableName" maxlength="70" autocomplete="organization" value="' + esc(s.stableName) + '"></label>' +
+      (legacyStable ? '<p class="small">' + esc(t('legacyAddress')) + ' <em>' + esc(s.address) + '</em></p>' : '') +
+      addressFields('data-setting', s) +
+      '<label class="block">' + esc(t('contact')) + '<textarea rows="2" data-setting="contact">' + esc(s.contact) + '</textarea></label>' +
+      '<label class="block">' + esc(t('ibanLabel')) + '<input data-setting="iban" autocomplete="off" spellcheck="false" value="' + esc(Q.formatIban(s.iban)) + '"></label>' +
+      '<p class="small ' + (ib.ok ? 'ok' : 'bad') + '" id="iban-status">' + esc(ib.text) + '</p>' +
+      (isQr
+        ? '<label class="block">' + esc(t('qrrPrefix')) + '<input data-setting="qrrPrefix" inputmode="numeric" maxlength="16" value="' + esc(s.qrrPrefix) + '"></label>'
+        : '<label class="block">' + esc(t('refType')) + '<select data-setting="refType">' +
+          '<option value="SCOR"' + (s.refType !== 'NON' ? ' selected' : '') + '>' + esc(t('refScor')) + '</option>' +
+          '<option value="NON"' + (s.refType === 'NON' ? ' selected' : '') + '>' + esc(t('refNon')) + '</option></select></label>') +
       '<label class="block">' + esc(t('paymentDays')) + '<input type="number" min="0" data-setting="paymentDays" value="' + esc(s.paymentDays) + '"></label></div>';
 
     html += '<div class="card"><h2>' + esc(t('services')) + '</h2><div class="table">';
@@ -277,12 +368,14 @@
     });
     html += '</div><button type="button" class="btn" data-action="add-svc">+ ' + esc(t('add')) + '</button></div>';
 
-    html += '<div class="card"><h2>' + esc(t('owners')) + '</h2>';
+    html += '<div class="card"><h2>' + esc(t('owners')) + '</h2><p class="small muted">' + esc(t('ownerAddressHelp')) + '</p>';
     data.owners.forEach(function (o) {
-      html += '<div class="trow owner">' +
-        '<input aria-label="' + esc(t('ownerName')) + '" placeholder="' + esc(t('ownerName')) + '" data-own="' + esc(o.id) + '" data-field="name" value="' + esc(o.name) + '">' +
-        '<textarea rows="2" aria-label="' + esc(t('ownerAddress')) + '" placeholder="' + esc(t('ownerAddress')) + '" data-own="' + esc(o.id) + '" data-field="address">' + esc(o.address) + '</textarea>' +
-        '<button type="button" class="btn danger small" data-del-own="' + esc(o.id) + '">×</button></div>';
+      var legacy = o.address && !o.postalCode && !o.town;
+      html += '<fieldset class="horse owner"><div class="trow">' +
+        '<input aria-label="' + esc(t('ownerName')) + '" placeholder="' + esc(t('ownerName')) + '" maxlength="70" data-own="' + esc(o.id) + '" data-field="name" value="' + esc(o.name) + '">' +
+        '<button type="button" class="btn danger small" data-del-own="' + esc(o.id) + '">×</button></div>' +
+        (legacy ? '<p class="small">' + esc(t('legacyAddress')) + ' <em>' + esc(o.address) + '</em></p>' : '') +
+        addressFields('data-own="' + esc(o.id) + '" data-field', o) + '</fieldset>';
     });
     html += '<button type="button" class="btn" data-action="add-own">+ ' + esc(t('add')) + '</button></div>';
 
@@ -365,7 +458,7 @@
         data.services.push({ id: B.newId('s'), name: '', price: 0, unit: 'once' });
         save(); renderSetup(); break;
       case 'add-own':
-        data.owners.push({ id: B.newId('o'), name: '', address: '' });
+        data.owners.push({ id: B.newId('o'), name: '', street: '', buildingNo: '', postalCode: '', town: '', country: 'CH' });
         save(); renderSetup(); break;
       case 'add-hor':
         data.horses.push({ id: B.newId('h'), name: '', ownerId: data.owners[0] ? data.owners[0].id : '', boardServiceId: '', recurring: [], start: '', end: '' });
@@ -398,8 +491,15 @@
     if (el.id === 'month-pick') { if (/^\d{4}-\d{2}$/.test(el.value)) { ui.month = el.value; renderMonth(); } return; }
     if (d.status) { data.status[d.status] = el.value; save(); return; }
     if (d.setting) {
-      data.settings[d.setting] = d.setting === 'paymentDays' ? Math.max(0, Number(el.value) || 0) : el.value;
-      save(); return;
+      var v = el.value;
+      if (d.setting === 'paymentDays') v = Math.max(0, Number(v) || 0);
+      if (d.setting === 'iban') v = Q.cleanIban(v);
+      if (d.setting === 'country') v = String(v).trim().toUpperCase();
+      if (d.setting === 'qrrPrefix') v = String(v).replace(/\D/g, '');
+      data.settings[d.setting] = v;
+      save();
+      if (d.setting === 'iban' || d.setting === 'refType' || d.setting === 'qrrPrefix' || d.setting === 'country') renderSetup();
+      return;
     }
     if (d.svc) {
       var sv = byId(data.services, d.svc);
@@ -414,7 +514,7 @@
     }
     if (d.own) {
       var o = byId(data.owners, d.own);
-      if (o) { o[d.field] = el.value; save(); }
+      if (o) { o[d.field] = d.field === 'country' ? String(el.value).trim().toUpperCase() : el.value; save(); }
       return;
     }
     if (d.hor) {

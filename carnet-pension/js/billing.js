@@ -228,13 +228,73 @@
   function emptyData() {
     return {
       version: 1,
-      settings: { stableName: '', address: '', iban: '', currency: 'CHF', lang: 'fr', paymentDays: 30 },
+      settings: {
+        stableName: '', address: '', iban: '', currency: 'CHF', lang: 'fr', paymentDays: 30,
+        street: '', buildingNo: '', postalCode: '', town: '', country: 'CH', contact: '',
+        refType: 'SCOR', qrrPrefix: ''
+      },
       services: [],
       owners: [],
       horses: [],
       entries: [],
       status: {}
     };
+  }
+
+  var ADDRESS_FIELDS = ['street', 'buildingNo', 'postalCode', 'town', 'country'];
+
+  /**
+   * Best-effort split of a free-text Swiss address ("Rue A 12\n1700 Fribourg") into
+   * { street, buildingNo, postalCode, town, country }. Returns null when no "NPA localité" line is found.
+   */
+  function parseAddress(text) {
+    var lines = String(text || '').split(/\r?\n/).map(function (l) { return l.trim(); }).filter(Boolean);
+    for (var i = lines.length - 1; i >= 0; i--) {
+      var m = /^(?:([A-Z]{2})\s*-\s*)?(\d{4,5})\s+(.+)$/.exec(lines[i]);
+      if (!m) continue;
+      var res = { street: '', buildingNo: '', postalCode: m[2], town: m[3].trim(), country: m[1] || (m[2].length === 4 ? 'CH' : '') };
+      if (i > 0) {
+        var st = /^(.*?\S)\s+(\d+[a-zA-Z]?(?:\s?[-\/]\s?\d+[a-zA-Z]?)?)$/.exec(lines[i - 1]);
+        if (st) { res.street = st[1]; res.buildingNo = st[2]; } else { res.street = lines[i - 1]; }
+      }
+      return res;
+    }
+    return null;
+  }
+
+  /** Fill empty structured address fields of obj from its legacy free-text address (if it can be parsed). */
+  function migrateAddress(obj) {
+    if (!obj || obj.postalCode || obj.town || !obj.address) return obj;
+    var parsed = parseAddress(obj.address);
+    if (!parsed) return obj;
+    ADDRESS_FIELDS.forEach(function (k) {
+      if (parsed[k] && (!obj[k] || k === 'country')) obj[k] = parsed[k];
+    });
+    return obj;
+  }
+
+  /** Address lines for the invoice header: structured if available, otherwise the legacy text. */
+  function addressLines(obj) {
+    if (!obj) return [];
+    if (obj.postalCode || obj.town) {
+      var lines = [];
+      var street = ((obj.street || '') + ' ' + (obj.buildingNo || '')).trim();
+      if (street) lines.push(street);
+      var country = String(obj.country || 'CH').toUpperCase();
+      lines.push(((country !== 'CH' ? country + '-' : '') + (obj.postalCode || '') + ' ' + (obj.town || '')).trim());
+      return lines;
+    }
+    return String(obj.address || '').split(/\r?\n/).map(function (l) { return l.trim(); }).filter(Boolean);
+  }
+
+  /** Position (1-based) of the owner in the owner list, used in the invoice number. */
+  function invoiceSeq(data, ownerId) {
+    return (data.owners || []).map(function (o) { return o.id; }).indexOf(ownerId) + 1;
+  }
+
+  /** Invoice number "YYYYMM-NN" (unchanged format). */
+  function invoiceNumber(data, inv) {
+    return inv.month.replace('-', '') + '-' + pad2(invoiceSeq(data, inv.ownerId));
   }
 
   /** Normalise imported data (from backup file); throws on invalid shape. */
@@ -251,6 +311,8 @@
       d[k] = (raw[k] || []).filter(function (x) { return x && typeof x === 'object' && x.id; });
     });
     if (raw.status && typeof raw.status === 'object') d.status = raw.status;
+    migrateAddress(d.settings);
+    d.owners.forEach(migrateAddress);
     return d;
   }
 
@@ -270,6 +332,11 @@
     normalize: normalize,
     monthOf: monthOf,
     isDate: isDate,
-    fmtNum: fmtNum
+    fmtNum: fmtNum,
+    parseAddress: parseAddress,
+    migrateAddress: migrateAddress,
+    addressLines: addressLines,
+    invoiceSeq: invoiceSeq,
+    invoiceNumber: invoiceNumber
   };
 });
