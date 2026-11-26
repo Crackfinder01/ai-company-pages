@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stripe-, PayPal- und SumUp-Auszahlungen automatisch in bexio verbuchen (Vorbestellung, 29 CHF)</title>
+<meta name="description" content="Projekt in Vorbereitung: Stripe-, PayPal- und SumUp-Auszahlungen (Verkäufe, Gebühren, Sammelüberweisung) automatisch in bexio verbuchen. Reservation 29 CHF, zu 100 % rückzahlbar auf einfache Anfrage oder bei Nichtlieferung bis 29.01.2027.">
+<meta name="robots" content="noindex">
+
+<style>
+ body{font-family:system-ui,Arial,sans-serif;margin:0;color:#1d2733;background:#f6f8fa;line-height:1.55}
+ main{max-width:720px;margin:0 auto;padding:24px 18px 60px}
+ h1{font-size:1.8rem;line-height:1.2;margin:8px 0 10px}
+ h2{font-size:1.2rem;margin-top:30px}
+ .lead{font-size:1.1rem}
+ .mock{background:#fff;border:1px dashed #8a96a3;border-radius:10px;padding:14px 16px;margin:14px 0}
+ .mock .tag{display:inline-block;background:#eef1f4;color:#46515c;font-size:.8rem;border-radius:6px;padding:2px 8px;margin-bottom:8px}
+ .mock table{border-collapse:collapse;width:100%;font-size:.95rem}
+ .mock td,.mock th{border-bottom:1px solid #e3e7eb;padding:5px 6px;text-align:left}
+ .mock td.n,.mock th.n{text-align:right;white-space:nowrap}
+ .price{background:#fff;border:1px solid #d0d7de;border-radius:10px;padding:16px;margin:18px 0}
+ .price strong.big{font-size:1.6rem}
+ .guar{background:#e6f5ea;border:1px solid #8fcf9f;border-radius:10px;padding:10px 14px;margin:18px 0}
+ .free{background:#fff8e1;border:1px solid #e6cf7a;border-radius:10px;padding:10px 14px;margin:18px 0}
+ .cta{display:inline-block;background:#0b5cad;color:#fff;border:0;border-radius:8px;padding:14px 26px;font-size:1.05rem;cursor:pointer;text-decoration:none}
+ .cta:hover{background:#084a8c}
+ .prep{font-size:.9rem;color:#58626d;margin:8px 0 0}
+ .thanks{display:none;background:#e6f5ea;border:1px solid #8fcf9f;border-radius:10px;padding:18px;margin-top:18px}
+ .why{margin-top:22px;font-size:.88rem;color:#58626d}
+ .why a{color:#58626d}
+ ul{padding-left:20px}
+ table.plans{border-collapse:collapse;width:100%;font-size:.95rem;margin:10px 0}
+ table.plans td,table.plans th{border:1px solid #d0d7de;padding:6px 8px;text-align:left}
+ small,.small{color:#58626d;font-size:.85rem}
+ footer{margin-top:40px;border-top:1px solid #d0d7de;padding-top:14px}
+</style>
+</head>
+<body>
+<!-- Besucherzähler: Cloudflare Web Analytics (ohne Cookie, ohne personenbezogene Daten, Cloudflare-Konto des Verkäufers). -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "12b0586ec92542acb023e64d7f75623d", "spa": true}'></script>
+<main>
+
+ <p class="small"><a href="fr/">Français</a></p>
+<h1>Stripe-, PayPal- und SumUp-Auszahlungen automatisch in bexio verbuchen</h1>
+ <p class="lead">Verkäufe, Gebühren und Sammelüberweisung werden getrennt in Ihre bexio-Buchhaltung gebucht, ohne dass Sie Auszahlungsberichte von Hand abgleichen. Kompatibel mit bexio.</p>
+
+ <h2>Das Problem</h2>
+ <p>Stripe, PayPal und SumUp überweisen Ihnen nicht jede Zahlung einzeln, sondern <strong>einen Betrag, der mehrere Verkäufe bündelt und die Gebühren schon abgezogen hat</strong>. Auf dem Bankkonto sehen Sie nur diese Summe. Wer sie in bexio nicht aufteilt, hat einen falschen Umsatz oder Gebühren, die nirgends stehen.</p>
+
+ <h2>So soll es aussehen</h2>
+ <div class="mock">
+  <span class="tag">Mockup: von uns geschriebenes Beispiel mit erfundenen Zahlen, kein echtes Ergebnis</span>
+  <p><strong>Eine Auszahlung von 967.50 CHF auf Ihrem Bankkonto, so würden die Buchungen in bexio entstehen:</strong></p>
+  <table>
+   <tr><th>Buchung</th><th class="n">Betrag CHF</th></tr>
+   <tr><td>Verkäufe der Periode (12 Zahlungen)</td><td class="n">1 000.00</td></tr>
+   <tr><td>Gebühren des Zahlungsanbieters</td><td class="n">- 32.50</td></tr>
+   <tr><td>Rückerstattung an einen Kunden</td><td class="n">0.00</td></tr>
+   <tr><td><strong>Auszahlung auf das Bankkonto</strong></td><td class="n"><strong>967.50</strong></td></tr>
+  </table>
+ </div>
+ <p class="small">Geplant für Stripe, PayPal und SumUp: Verkäufe, Gebühren, Rückerstattungen und Sammelüberweisung. <strong>Payrexx und TWINT: nur auf Anfrage</strong>, in der ersten Version nicht zugesagt. Das echte Produkt existiert noch nicht.</p>
+
+ <h2>Ihre Fragen</h2>
+ <ul>
+  <li><strong>«Sind die Buchungen korrekt?»</strong> Wir können noch keine Fehlerquote nennen, weil es das Produkt noch nicht gibt. Ziel der ersten Version: Sie legt nur neue Buchungen an, die Sie in bexio sehen und stornieren können, und ändert oder löscht keine bestehenden. Die Mehrwertsteuer wird pro Konto mit einem einmal festgelegten Satz gebucht; <strong>Shops mit mehreren MWST-Sätzen (z. B. 8,1 % und 2,6 %) sind in der ersten Version nicht abgedeckt.</strong> Passt das nicht, erhalten Sie Ihr Geld zurück.</li>
+  <li><strong>«Was passiert mit meinen Daten?»</strong> Diese Seite speichert nichts. Das spätere Produkt bräuchte lesenden Zugriff auf Ihre Zahlungsanbieter und Schreibzugriff auf Ihre Buchungen in bexio. Wo die Daten verarbeitet werden, legen wir vor der ersten Nutzung fest und teilen es Ihnen mit; wenn Sie damit nicht einverstanden sind, erhalten Sie die Reservation zurück. Die Zahlung läuft über Stripe: Wir sehen nie Ihre Kartendaten.</li>
+  <li><strong>«Und wenn es nicht klappt?»</strong> Sie bekommen 100 % zurück, auf einfache Anfrage per E-Mail oder automatisch, wenn wir nicht bis zum 29.01.2027 liefern. Siehe Garantie unten.</li>
+ </ul>
+
+ <div class="free"><strong>Was es heute schon gibt, bevor Sie zahlen:</strong> Vorlagen für Zapier oder Make (Stripe nach bexio, selbst einzurichten), Ihre Treuhänderin oder Ihr Treuhänder, die/der die Auszahlungen von Hand verbucht (Stundenansatz: je nach Büro, <em>zu prüfen</em>), und bexio-Anbindungen für Bestellungen, etwa für Shopify oder SumUp. Nach deren öffentlichen Beschreibungen (Stand 26.11.2026) erwähnen sie die Gebühren nicht ausdrücklich; <em>fragen Sie dort nach, ob das bei Ihnen abgedeckt ist</em>. Wir haben keine Verbindung zu diesen Anbietern.</div>
+
+ <div class="guar"><strong>Garantie:</strong> 100 % Rückerstattung auf einfache Anfrage (per E-Mail, ohne Begründung), jederzeit vor der Lieferung, und automatisch, wenn das Produkt nicht bis zum 29.01.2027 geliefert wird. Details in den <a href="conditions.html#de">Bedingungen</a>.</div>
+
+ <div class="price">
+  <h2 style="margin-top:0">Preis</h2>
+  <table class="plans">
+   <tr><th>Stufe</th><th>pro Monat, MWST inkl.</th><th>Umfang (geplant)</th></tr>
+   <tr><td>Start</td><td><strong>29 CHF</strong></td><td>bis 200 Transaktionen, 1 Zahlungsanbieter</td></tr>
+   <tr><td>Plus</td><td><strong>59 CHF</strong></td><td>bis 1 000 Transaktionen, 3 Zahlungsanbieter</td></tr>
+   <tr><td>Pro</td><td><strong>99 CHF</strong></td><td>bis 5 000 Transaktionen, alle unterstützten Anbieter</td></tr>
+  </table>
+  <p class="small">Preise von uns festgelegt, nicht aus einer Marktstudie. Vergleichswerte aus öffentlichen Preisseiten: A2X (gleiche Aufgabe für Xero/Shopify, nicht für bexio) 29 / 49 / 85 USD pro Monat (<a href="https://a2xaccounting.com/shopify/pricing" rel="noopener">a2xaccounting.com</a>, Stand 26.11.2026); Helvy (Shopify-Bestellungen nach bexio) 12,74 bis 63,76 USD pro Monat (<a href="https://apps.shopify.com/helvy-bexio-connector" rel="noopener">Shopify App Store</a>, Stand 26.11.2026). Diese Produkte lösen nicht genau dasselbe Problem wie unseres.</p>
+  <p><strong>Reservation: 29 CHF</strong>, einmalige Zahlung, <strong>kein Abo und keine automatische Verlängerung</strong>. Die 29 CHF werden auf den ersten Monat nach der Lieferung angerechnet, auch wenn Sie später die Stufe Plus oder Pro wählen. Reservationen bis 11.12.2026.</p>
+  <a class="cta" id="reserve" href="https://buy.stripe.com/aFacN55505jHbEH9V2cwg01" onclick="reserve()">Reservieren für 29 CHF — 100 % rückzahlbar auf einfache Anfrage oder bei Nichtlieferung bis 29.01.2027</a>
+  <p class="prep"><strong>In Vorbereitung:</strong> das Produkt existiert noch nicht; Sie reservieren eine erste Version, die bis spätestens 29.01.2027 geliefert wird. Zahlung auf der gesicherten Seite von Stripe; Verkäuferin: CrackFinder Sàrl (Eintrag «CRACKFINDER» auf Ihrem Kontoauszug), MWST inklusive.</p>
+
+  <p class="why">Nichts für mich:
+   <a href="raison-prix" onclick="why(event,'prix')">zu teuer</a> ·
+   <a href="raison-doute" onclick="why(event,'doute')">ich zweifle am Ergebnis</a> ·
+   <a href="raison-autre" onclick="why(event,'autre')">ich suche etwas anderes</a>
+  </p>
+  <div class="thanks" id="thanks-why" role="status">Danke, vermerkt (anonym).</div>
+ </div>
+
+ <p class="small">«bexio» ist eine Marke der bexio AG. Dieses Projekt ist unabhängig, hat keine Verbindung zu bexio, Stripe, PayPal oder SumUp und ist kein offizielles Angebot; «kompatibel mit bexio» beschreibt nur das Ziel der Anbindung. Verkäuferin: siehe <a href="conditions.html#de">Bedingungen</a>.</p>
+
+ <footer class="small">
+  Diese Seite enthält keine Cookies und kein Formular. Besuche und Klicks werden von einem cookielosen Zähler (Cloudflare Web Analytics) ohne personenbezogene Daten gezählt. Wenn Sie reservieren, erfasst Stripe Ihre Zahlungsdaten und Ihre E-Mail-Adresse für eigene Zwecke; siehe <a href="conditions.html#de">Bedingungen</a>.
+ </footer>
+</main>
+<script>
+ var whyDone = false;
+ function reserve(){
+  // Zählt einen anonymen Klick auf «Reservieren»: Seitenaufruf /reserver in Cloudflare Web Analytics, danach öffnet sich der Stripe-Link.
+  try { history.pushState({}, '', 'reserver'); } catch(e) {}
+ }
+ function why(e, r){
+  e.preventDefault();
+  document.getElementById('thanks-why').style.display = 'block';
+  if(!whyDone){
+   whyDone = true;
+   try { history.pushState({}, '', 'raison-'+r); } catch(x) {}
+  }
+ }
+</script>
+</body>
+</html>
