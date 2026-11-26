@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Un code QR par employé pour vos avis Google (prévente, 49 CHF)</title>
+<meta name="description" content="Projet en préparation pour restaurants et hôtels : un code QR par employé qui mène à la page d'avis Google de votre établissement, plus un compteur de scans. Réservation de 49 CHF, remboursée à 100 % sur simple demande ou si non livré avant le 22.01.2027.">
+<meta name="robots" content="noindex">
+<style>
+ body{font-family:system-ui,Arial,sans-serif;margin:0;color:#1d2733;background:#f6f8fa;line-height:1.55}
+ main{max-width:720px;margin:0 auto;padding:24px 18px 60px}
+ h1{font-size:1.8rem;line-height:1.2;margin:8px 0 10px}
+ h2{font-size:1.2rem;margin-top:30px}
+ .lead{font-size:1.1rem}
+ .mock{background:#fff;border:1px dashed #8a96a3;border-radius:10px;padding:14px 16px;margin:14px 0}
+ .mock .tag{display:inline-block;background:#eef1f4;color:#46515c;font-size:.8rem;border-radius:6px;padding:2px 8px;margin-bottom:8px}
+ .mock table{border-collapse:collapse;width:100%;font-size:.95rem}
+ .mock td,.mock th{border-bottom:1px solid #e3e7eb;padding:5px 6px;text-align:left}
+ .mock td.n,.mock th.n{text-align:right;white-space:nowrap}
+ .price{background:#fff;border:1px solid #d0d7de;border-radius:10px;padding:16px;margin:18px 0}
+ .guar{background:#e6f5ea;border:1px solid #8fcf9f;border-radius:10px;padding:10px 14px;margin:18px 0}
+ .free{background:#fff8e1;border:1px solid #e6cf7a;border-radius:10px;padding:10px 14px;margin:18px 0}
+ .rules{background:#fff;border:1px solid #d0d7de;border-radius:10px;padding:10px 14px;margin:18px 0}
+ .cta{display:inline-block;background:#0b5cad;color:#fff;border:0;border-radius:8px;padding:14px 26px;font-size:1.05rem;cursor:pointer;text-decoration:none}
+ .cta:hover{background:#084a8c}
+ .prep{font-size:.9rem;color:#58626d;margin:8px 0 0}
+ .thanks{display:none;background:#e6f5ea;border:1px solid #8fcf9f;border-radius:10px;padding:18px;margin-top:18px}
+ .why{margin-top:22px;font-size:.88rem;color:#58626d}
+ .why a{color:#58626d}
+ ul{padding-left:20px}
+ small,.small{color:#58626d;font-size:.85rem}
+ footer{margin-top:40px;border-top:1px solid #d0d7de;padding-top:14px}
+</style>
+</head>
+<body>
+<!-- Compteur de visites : Cloudflare Web Analytics (sans cookie, sans donnée personnelle, compte Cloudflare du vendeur). -->
+<script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "12b0586ec92542acb023e64d7f75623d", "spa": true}'></script>
+<main>
+
+ <p class="small"><a href="../">Deutsch</a></p>
+<h1>Un code QR par employé qui mène à la page d'avis Google de votre établissement</h1>
+ <p class="lead">Pour restaurants et hôtels : un code QR par employé ou par endroit (table, bar, réception), au choix. Vous voyez chaque mois combien de fois chaque code a été scanné et vous voyez quels codes amènent les clients vers la page d'avis. Les employés sont informés avant. Sans classement, sans quota, sans récompense.</p>
+
+ <h2>Le problème</h2>
+ <p>Les avis Google font venir des clients. Mais au quotidien, personne ne sait à quels endroits de l'établissement les clients trouvent le chemin vers un avis. Le lien que Google propose lui-même est le même pour tous et ne compte rien.</p>
+
+ <h2>À quoi cela ressemblera</h2>
+ <div class="mock">
+  <span class="tag">Maquette : exemple écrit par nous, chiffres inventés, pas un vrai résultat</span>
+  <p><strong>Scans par code, novembre (exemple) :</strong></p>
+  <table>
+   <tr><th>Code (vous choisissez le nom)</th><th class="n">Scans</th></tr>
+   <tr><td>Bar</td><td class="n">3</td></tr>
+   <tr><td>Service 1</td><td class="n">14</td></tr>
+   <tr><td>Service 2</td><td class="n">9</td></tr>
+   <tr><td><strong>Total</strong></td><td class="n"><strong>26</strong></td></tr>
+  </table>
+  <p class="small">On compte des scans, pas des avis publiés : c'est le client seul qui décide d'écrire un avis.</p>
+ </div>
+
+ <h2>Ce que nous construisons (première version)</h2>
+ <ul>
+  <li>Un code QR par employé (à imprimer sur une carte, un support de table ou une addition), qui ouvre la page d'avis Google de votre établissement.</li>
+  <li>Un compteur de scans par code et par mois.</li>
+  <li>Interface en français et en allemand, sans application à installer.</li>
+ </ul>
+
+ <div class="rules"><strong>Ce que nous ne ferons jamais :</strong> pas de classement des employés, pas de quota d'avis par personne, pas de récompense (cadeau, rabais, roue de la chance) pour les clients ou l'équipe, pas de tri « seulement les clients satisfaits ». La règle de Google interdit les avantages offerts contre un avis, la sollicitation sélective d'avis positifs et le fait de demander au personnel un nombre d'avis : <a href="https://support.google.com/contributionpolicy/answer/7400114" rel="noopener">support.google.com/contributionpolicy/answer/7400114</a> (lue le 26.11.2026). Notre produit est conçu pour que vous puissiez respecter ces règles ; il ne remplace pas votre propre responsabilité.</div>
+
+ <h2>Vos questions</h2>
+ <ul>
+  <li><strong>« Est-ce que ça fait venir plus d'avis ? »</strong> Nous ne promettons ni résultat ni meilleure note. Vous voyez seulement combien de fois vos codes sont utilisés.</li>
+  <li><strong>« Et les données de mes employés et de mes clients ? »</strong> Cette page ne stocke rien. Dans le produit, c'est vous qui nommez les codes (prénom, initiales ou « Service 1 ») ; nous ne comptons que des scans, sans donnée sur les clients. Le lieu où tournent les compteurs et le prestataire vous seront communiqués avant la première utilisation ; si cela ne vous convient pas, vous êtes remboursé. Le paiement passe par Stripe : nous ne voyons jamais vos données de carte.</li>
+  <li><strong>« Et si ça ne marche pas ? »</strong> Vous êtes remboursé à 100 %, sur simple demande par e-mail ou automatiquement si nous ne livrons pas avant le 22.01.2027.</li>
+ </ul>
+
+ <div class="free"><strong>Ce qui existe déjà, avant de payer :</strong> Google propose lui-même un lien d'avis gratuit avec code QR pour votre établissement (un seul code pour tous, sans comptage par personne ; <em>à vérifier</em>). Des outils étrangers de suivi d'avis demandent, selon leurs pages de prix publiques, environ 49 à 80 USD par mois et par établissement (état au 18.11.2026, <em>à vérifier</em>) ; certains proposent des classements et des primes que nous ne proposons pas. Nous n'avons aucun lien avec ces fournisseurs.</div>
+
+ <div class="guar"><strong>Garantie :</strong> remboursement à 100 % sur simple demande (par e-mail, sans justification), à tout moment avant la livraison, et automatiquement si le produit n'est pas livré avant le 22.01.2027. Détails dans les <a href="../conditions.html#fr">conditions</a>.</div>
+
+ <div class="price">
+  <h2 style="margin-top:0">Prix</h2>
+  <p>Prévu : <strong>49 CHF par mois</strong> et par établissement, TVA incluse, résiliable chaque mois. Prix fixé par nous, pas issu d'une étude de marché.</p>
+  <p><strong>Réservation : 49 CHF</strong>, paiement unique, <strong>sans abonnement ni renouvellement automatique</strong>. Les 49 CHF sont déduits du premier mois après la livraison. Réservations jusqu'au 11.12.2026.</p>
+  <a class="cta" id="reserve" href="https://book.stripe.com/14AdR9fJE13rfUXgjqcwg02" onclick="reserve()">Réserver pour 49 CHF — remboursé à 100 % sur simple demande ou si non livré avant le 22.01.2027</a>
+  <p class="prep"><strong>En préparation :</strong> le produit n'existe pas encore ; vous réservez une première version, livrée au plus tard le 22.01.2027. Paiement sur la page sécurisée de Stripe ; vendeur : CrackFinder Sàrl (libellé « CRACKFINDER » sur votre relevé), TVA incluse.</p>
+
+  <p class="why">Pas pour moi :
+   <a href="raison-prix" onclick="why(event,'prix')">trop cher</a> ·
+   <a href="raison-doute" onclick="why(event,'doute')">je doute du résultat</a> ·
+   <a href="raison-autre" onclick="why(event,'autre')">je cherche autre chose</a>
+  </p>
+  <div class="thanks" id="thanks-why" role="status">Merci, c'est noté (anonyme).</div>
+ </div>
+
+ <p class="small">Projet indépendant, sans lien avec Google ni avec une association professionnelle ; « Google » désigne seulement la plateforme d'avis. Vendeur : voir les <a href="../conditions.html#fr">conditions</a>.</p>
+
+ <footer class="small">
+  Cette page ne contient ni cookie ni formulaire. Les visites et les clics sont comptés par un compteur sans cookie (Cloudflare Web Analytics), sans donnée personnelle. Si vous réservez, Stripe collecte vos données de paiement et votre adresse e-mail pour son propre compte ; voir les <a href="../conditions.html#fr">conditions</a>.
+ </footer>
+</main>
+<script>
+ var whyDone = false;
+ function reserve(){
+  // Compte un clic anonyme sur « Réserver » : page vue /reserver dans Cloudflare Web Analytics, puis le lien Stripe s'ouvre.
+  try { history.pushState({}, '', 'reserver'); } catch(e) {}
+ }
+ function why(e, r){
+  e.preventDefault();
+  document.getElementById('thanks-why').style.display = 'block';
+  if(!whyDone){
+   whyDone = true;
+   try { history.pushState({}, '', 'raison-'+r); } catch(x) {}
+  }
+ }
+</script>
+</body>
+</html>
